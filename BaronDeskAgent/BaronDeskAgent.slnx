@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="BaronDesk.LockUI/BaronDesk.LockUI.csproj" />
+  <Project Path="BaronDesk.Shared/BaronDesk.Shared.csproj" />
+  <Project Path="BaronDeskAgent.ServiceCore/BaronDeskAgent.ServiceCore.csproj" />
+</Solution>
