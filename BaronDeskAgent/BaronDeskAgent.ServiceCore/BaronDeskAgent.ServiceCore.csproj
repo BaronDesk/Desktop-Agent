@@ -10,4 +10,15 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Data\" />
+    <Folder Include="Models\" />
+    <Folder Include="Communication\" />
+    <Folder Include="Hardware\" />
+    <Folder Include="Commands\" />
+    <Folder Include="Configuration\" />
+    <Folder Include="Security\" />
+    <Folder Include="Services\" />
+  </ItemGroup>
 </Project>
