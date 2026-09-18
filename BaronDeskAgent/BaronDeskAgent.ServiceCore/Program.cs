@@ -3,6 +3,7 @@ using BaronDeskAgent.ServiceCore.Data.Database;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
 using BaronDeskAgent.ServiceCore.Hardware;
 using BaronDeskAgent.ServiceCore.Services;
+using BaronDeskAgent.ServiceCore.Services.Outbox;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -35,6 +36,12 @@ builder.Services.AddSingleton<TelemetryService>();
 builder.Services.AddHostedService(
     serviceProvider =>
         serviceProvider.GetRequiredService<TelemetryService>());
+
+// ---------------------------------------------------------
+// Outbox
+// ---------------------------------------------------------
+
+builder.Services.AddHostedService<OutboxWorker>();
 
 // ---------------------------------------------------------
 // Monitoring
