@@ -1,14 +1,14 @@
 ﻿namespace BaronDesk.Shared.Models;
 
-public class TelemetryEnvelope
+public sealed class TelemetryEnvelope
 {
-    public string Type { get; set; } = string.Empty;
+    public required string Type { get; init; }
 
-    public Guid Id { get; set; }
+    public required Guid Id { get; init; }
 
-    public DateTime Ts { get; set; }
+    public required DateTimeOffset Timestamp { get; init; }
 
-    public long Seq { get; set; }
+    public required long Sequence { get; init; }
 
-    public object Payload { get; set; } = new();
+    public required object Payload { get; init; }
 }

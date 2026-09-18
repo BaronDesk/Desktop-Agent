@@ -4,7 +4,15 @@ using BaronDeskAgent.ServiceCore.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// ---------------------------------------------------------
+// Hardware
+// ---------------------------------------------------------
+
 builder.Services.AddSingleton<HardwareSensorReader>();
+
+// ---------------------------------------------------------
+// Telemetry
+// ---------------------------------------------------------
 
 builder.Services.AddSingleton<
     ITelemetryTransport,
@@ -16,13 +24,23 @@ builder.Services.AddHostedService(
     serviceProvider =>
         serviceProvider.GetRequiredService<TelemetryService>());
 
+// ---------------------------------------------------------
+// Background monitoring
+// ---------------------------------------------------------
+
+builder.Services.AddHostedService<HardwareMonitorService>();
+
+builder.Services.AddHostedService<WindowsDeviceMonitorService>();
+
+// ---------------------------------------------------------
+// Existing Worker
+// ---------------------------------------------------------
+
 builder.Services.AddHostedService<Worker>();
 
-builder.Services.AddHostedService<
-    HardwareMonitorService>();
-
-builder.Services.AddHostedService<
-    WindowsDeviceMonitorService>();
+// ---------------------------------------------------------
+// Build and run
+// ---------------------------------------------------------
 
 var host = builder.Build();
 

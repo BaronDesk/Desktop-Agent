@@ -1,9 +1,9 @@
-﻿using BaronDeskAgent.ServiceCore.Services;
-using BaronDesk.Shared.Models;
+﻿using BaronDesk.Shared.Models;
+using BaronDeskAgent.ServiceCore.Services;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
-public class HardwareMonitorService : BackgroundService
+public sealed class HardwareMonitorService : BackgroundService
 {
     private readonly HardwareSensorReader _sensorReader;
     private readonly TelemetryService _telemetryService;
@@ -26,64 +26,51 @@ public class HardwareMonitorService : BackgroundService
         CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "Starting hardware monitoring...");
+            "Hardware monitoring service starting.");
+
+        _sensorReader.Start();
 
         try
         {
-            _sensorReader.Start();
-
-            _logger.LogInformation(
-                "Hardware monitoring started successfully.");
-
-            await PublishTelemetryAsync(
-                stoppingToken);
-
             using var timer =
                 new PeriodicTimer(SampleInterval);
 
             while (await timer.WaitForNextTickAsync(
-                       stoppingToken))
+                stoppingToken))
             {
-                await PublishTelemetryAsync(
-                    stoppingToken);
+                try
+                {
+                    HardwareTelemetry telemetry =
+                        _sensorReader.ReadTelemetry();
+
+                    await _telemetryService.PublishHardwareAsync(
+                        telemetry,
+                        stoppingToken);
+                }
+                catch (OperationCanceledException)
+                    when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Error while collecting hardware telemetry.");
+                }
             }
         }
         catch (OperationCanceledException)
+            when (stoppingToken.IsCancellationRequested)
         {
             // Normal shutdown.
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Hardware monitoring failed.");
         }
         finally
         {
             _sensorReader.Stop();
 
             _logger.LogInformation(
-                "Hardware monitoring stopped.");
-        }
-    }
-
-    private async Task PublishTelemetryAsync(
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            HardwareTelemetry telemetry =
-                _sensorReader.ReadTelemetry();
-
-            await _telemetryService.PublishHardwareAsync(
-                telemetry,
-                cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                ex,
-                "Failed to collect hardware telemetry.");
+                "Hardware monitoring service stopped.");
         }
     }
 }
