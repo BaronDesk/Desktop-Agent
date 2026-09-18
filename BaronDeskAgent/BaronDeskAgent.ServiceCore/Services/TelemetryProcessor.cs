@@ -2,9 +2,9 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace BaronDesk.Shared.Models
+namespace BaronDeskAgent.ServiceCore.Services
 {
-    internal class AgentStatus
+    internal class TelemetryProcessor
     {
     }
 }
