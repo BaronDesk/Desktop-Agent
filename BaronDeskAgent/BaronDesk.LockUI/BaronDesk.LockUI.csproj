@@ -16,4 +16,8 @@
     <Folder Include="Views\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\BaronDesk.Shared\BaronDesk.Shared.csproj" />
+  </ItemGroup>
+
 </Project>
