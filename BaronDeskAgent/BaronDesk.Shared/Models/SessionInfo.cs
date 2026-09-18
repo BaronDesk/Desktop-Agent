@@ -4,7 +4,7 @@ using System.Text;
 
 namespace BaronDesk.Shared.Models
 {
-    internal class Class1
+    internal class SessionInfo
     {
     }
 }

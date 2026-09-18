@@ -1,46 +1,62 @@
-﻿using BaronDesk.Shared.Models;
+﻿using BaronDeskAgent.ServiceCore.Services;
+using BaronDesk.Shared.Models;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
 public class HardwareMonitorService : BackgroundService
 {
     private readonly HardwareSensorReader _sensorReader;
+    private readonly TelemetryService _telemetryService;
     private readonly ILogger<HardwareMonitorService> _logger;
+
+    private static readonly TimeSpan SampleInterval =
+        TimeSpan.FromSeconds(5);
 
     public HardwareMonitorService(
         HardwareSensorReader sensorReader,
+        TelemetryService telemetryService,
         ILogger<HardwareMonitorService> logger)
     {
         _sensorReader = sensorReader;
+        _telemetryService = telemetryService;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
-        _sensorReader.Start();
-
         _logger.LogInformation(
-            "Hardware monitoring started.");
+            "Starting hardware monitoring...");
 
         try
         {
-            while (!stoppingToken.IsCancellationRequested)
+            _sensorReader.Start();
+
+            _logger.LogInformation(
+                "Hardware monitoring started successfully.");
+
+            await PublishTelemetryAsync(
+                stoppingToken);
+
+            using var timer =
+                new PeriodicTimer(SampleInterval);
+
+            while (await timer.WaitForNextTickAsync(
+                       stoppingToken))
             {
-                HardwareTelemetry telemetry =
-                    _sensorReader.ReadTelemetry();
-
-                _logger.LogInformation(
-                    "CPU: {CpuTemp}°C | GPU: {GpuTemp}°C | CPU Load: {CpuLoad}% | GPU Load: {GpuLoad}%",
-                    telemetry.CpuTemperature,
-                    telemetry.GpuTemperature,
-                    telemetry.CpuLoad,
-                    telemetry.GpuLoad);
-
-                await Task.Delay(
-                    TimeSpan.FromSeconds(5),
+                await PublishTelemetryAsync(
                     stoppingToken);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Hardware monitoring failed.");
         }
         finally
         {
@@ -48,6 +64,26 @@ public class HardwareMonitorService : BackgroundService
 
             _logger.LogInformation(
                 "Hardware monitoring stopped.");
+        }
+    }
+
+    private async Task PublishTelemetryAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            HardwareTelemetry telemetry =
+                _sensorReader.ReadTelemetry();
+
+            await _telemetryService.PublishHardwareAsync(
+                telemetry,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to collect hardware telemetry.");
         }
     }
 }
