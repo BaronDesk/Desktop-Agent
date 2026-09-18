@@ -1,12 +1,13 @@
 ﻿using System.Runtime.InteropServices;
 using System.Threading.Channels;
-using BaronDeskAgent.ServiceCore.Hardware.Models;
-using BaronDeskAgent.ServiceCore.Services;
+
 using BaronDesk.Shared.Models;
+
+using BaronDeskAgent.ServiceCore.Services;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
-public class WindowsDeviceMonitorService : BackgroundService
+public sealed class WindowsDeviceMonitorService : BackgroundService
 {
     private readonly Channel<DeviceNotification> _channel;
 
@@ -22,7 +23,16 @@ public class WindowsDeviceMonitorService : BackgroundService
         _presentDevices =
             new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly object _lifecycleLock = new();
+
+    private readonly ManualResetEventSlim _callbacksCompleted =
+        new(initialState: true);
+
     private IntPtr _notificationHandle;
+
+    private int _shutdownStarted;
+
+    private int _activeCallbacks;
 
     public WindowsDeviceMonitorService(
         TelemetryService telemetryService,
@@ -36,7 +46,8 @@ public class WindowsDeviceMonitorService : BackgroundService
                 new UnboundedChannelOptions
                 {
                     SingleReader = true,
-                    SingleWriter = false
+                    SingleWriter = false,
+                    AllowSynchronousContinuations = false
                 });
 
         _callback = OnNativeDeviceEvent;
@@ -46,43 +57,59 @@ public class WindowsDeviceMonitorService : BackgroundService
         CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "Starting USB device monitoring...");
+            "Starting device monitoring...");
 
         try
         {
             RegisterForDeviceNotifications();
 
             _logger.LogInformation(
-                "USB device monitoring started successfully.");
+                "Device monitoring started successfully.");
 
             InitializeCurrentDevices();
 
             await foreach (
                 DeviceNotification notification
-                in _channel.Reader.ReadAllAsync(
-                    stoppingToken))
+                in _channel.Reader.ReadAllAsync(stoppingToken))
             {
-                await ProcessNotificationAsync(
-                    notification,
-                    stoppingToken);
+                try
+                {
+                    await ProcessNotificationAsync(
+                        notification,
+                        stoppingToken);
+                }
+                catch (OperationCanceledException)
+                    when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Error processing device notification. " +
+                        "Action={Action}, InstanceId={InstanceId}",
+                        notification.Action,
+                        notification.InstanceId);
+                }
             }
         }
         catch (OperationCanceledException)
+            when (stoppingToken.IsCancellationRequested)
         {
-            // Normal shutdown.
         }
         catch (Exception ex)
         {
             _logger.LogError(
                 ex,
-                "USB device monitoring failed.");
+                "Device monitoring failed.");
         }
         finally
         {
-            UnregisterForDeviceNotifications();
+            ShutdownNativeNotifications();
 
             _logger.LogInformation(
-                "USB device monitoring stopped.");
+                "Device monitoring stopped.");
         }
     }
 
@@ -94,7 +121,9 @@ public class WindowsDeviceMonitorService : BackgroundService
                 WindowsDeviceEnumerator
                     .GetPresentUsbDevices();
 
-        foreach (var device in devices)
+        foreach (
+            WindowsDeviceEnumerator.WindowsDeviceInfo device
+            in devices)
         {
             if (!ShouldMonitor(device))
             {
@@ -105,16 +134,17 @@ public class WindowsDeviceMonitorService : BackgroundService
         }
 
         _logger.LogInformation(
-            "Initial USB device inventory: {Count} devices.",
+            "Initial device inventory: {Count} devices.",
             _presentDevices.Count);
 
-        foreach (var device in _presentDevices.Values)
+        foreach (
+            WindowsDeviceEnumerator.WindowsDeviceInfo device
+            in _presentDevices.Values)
         {
             _logger.LogInformation(
-                "USB device present | {DeviceName} | PID: {ProductId}",
+                "Device present | {DeviceName} | PID: {ProductId}",
                 device.DeviceName,
-                string.IsNullOrWhiteSpace(
-                    device.ProductId)
+                string.IsNullOrWhiteSpace(device.ProductId)
                     ? "N/A"
                     : device.ProductId);
         }
@@ -127,19 +157,15 @@ public class WindowsDeviceMonitorService : BackgroundService
         switch (notification.Action)
         {
             case CMNotifyAction.DeviceInstanceStarted:
-
                 await HandleConnectedAsync(
                     notification.InstanceId,
                     cancellationToken);
-
                 break;
 
             case CMNotifyAction.DeviceInstanceRemoved:
-
                 await HandleDisconnectedAsync(
                     notification.InstanceId,
                     cancellationToken);
-
                 break;
         }
     }
@@ -178,25 +204,24 @@ public class WindowsDeviceMonitorService : BackgroundService
 
         _presentDevices[key] = device;
 
-        var deviceEvent =
-            new DeviceChangeEvent
+        var telemetry =
+            new DeviceTelemetry
             {
+                Timestamp = DateTime.UtcNow,
+                DeviceType = "Device",
                 DeviceName = device.DeviceName,
                 ProductId = device.ProductId,
-                DeviceType = "USB",
-                EventType = "Connected",
-                Timestamp = DateTime.UtcNow
+                EventType = "Connected"
             };
 
-        await PublishDeviceTelemetryAsync(
-            deviceEvent,
+        await _telemetryService.PublishDeviceAsync(
+            telemetry,
             cancellationToken);
 
         _logger.LogInformation(
-            "USB device connected | {DeviceName} | PID: {ProductId}",
+            "Device connected | {DeviceName} | PID: {ProductId}",
             device.DeviceName,
-            string.IsNullOrWhiteSpace(
-                device.ProductId)
+            string.IsNullOrWhiteSpace(device.ProductId)
                 ? "N/A"
                 : device.ProductId);
     }
@@ -223,43 +248,26 @@ public class WindowsDeviceMonitorService : BackgroundService
 
         _presentDevices.Remove(key);
 
-        var deviceEvent =
-            new DeviceChangeEvent
+        var telemetry =
+            new DeviceTelemetry
             {
+                Timestamp = DateTime.UtcNow,
+                DeviceType = "Device",
                 DeviceName = device.DeviceName,
                 ProductId = device.ProductId,
-                DeviceType = "USB",
-                EventType = "Disconnected",
-                Timestamp = DateTime.UtcNow
+                EventType = "Disconnected"
             };
 
-        await PublishDeviceTelemetryAsync(
-            deviceEvent,
+        await _telemetryService.PublishDeviceAsync(
+            telemetry,
             cancellationToken);
 
         _logger.LogInformation(
-            "USB device disconnected | {DeviceName} | PID: {ProductId}",
+            "Device disconnected | {DeviceName} | PID: {ProductId}",
             device.DeviceName,
-            string.IsNullOrWhiteSpace(
-                device.ProductId)
+            string.IsNullOrWhiteSpace(device.ProductId)
                 ? "N/A"
                 : device.ProductId);
-    }
-
-    private async Task PublishDeviceTelemetryAsync(
-        DeviceChangeEvent deviceEvent,
-        CancellationToken cancellationToken)
-    {
-        await _telemetryService.PublishDeviceEventAsync(
-            new DeviceTelemetry
-            {
-                Timestamp = deviceEvent.Timestamp,
-                DeviceType = "USB",
-                DeviceName = deviceEvent.DeviceName,
-                ProductId = deviceEvent.ProductId,
-                EventType = deviceEvent.EventType
-            },
-            cancellationToken);
     }
 
     private void AddPresentDevice(
@@ -293,7 +301,6 @@ public class WindowsDeviceMonitorService : BackgroundService
             return false;
         }
 
-        // Ignore USB interface instances.
         if (device.InstanceId.Contains(
                 "&MI_",
                 StringComparison.OrdinalIgnoreCase))
@@ -301,10 +308,10 @@ public class WindowsDeviceMonitorService : BackgroundService
             return false;
         }
 
-        // Ignore USB root hubs.
         if (device.DeviceName.Contains(
                 "Hub USB racine",
-                StringComparison.OrdinalIgnoreCase) ||
+                StringComparison.OrdinalIgnoreCase)
+            ||
             device.DeviceName.Contains(
                 "USB Root Hub",
                 StringComparison.OrdinalIgnoreCase))
@@ -317,48 +324,106 @@ public class WindowsDeviceMonitorService : BackgroundService
 
     private void RegisterForDeviceNotifications()
     {
-        var filter =
-            new CMNotifyFilter
-            {
-                CbSize =
-                    (uint)Marshal.SizeOf<CMNotifyFilter>(),
-
-                Flags =
-                    CMNotifyFilterFlags.AllDeviceInstances,
-
-                FilterType =
-                    CMNotifyFilterType.DeviceInstance,
-
-                Reserved = 0,
-
-                Data = new byte[400]
-            };
-
-        uint result =
-            CM_Register_Notification(
-                ref filter,
-                IntPtr.Zero,
-                _callback,
-                out _notificationHandle);
-
-        if (result != 0)
+        lock (_lifecycleLock)
         {
-            throw new InvalidOperationException(
-                $"CM_Register_Notification failed. CONFIGRET: 0x{result:X8}");
+            if (_notificationHandle != IntPtr.Zero)
+            {
+                return;
+            }
+
+            if (Volatile.Read(ref _shutdownStarted) != 0)
+            {
+                throw new InvalidOperationException(
+                    "Cannot register device notifications after shutdown has started.");
+            }
+
+            var filter =
+                new CMNotifyFilter
+                {
+                    CbSize =
+                        (uint)Marshal.SizeOf<CMNotifyFilter>(),
+
+                    Flags =
+                        CMNotifyFilterFlags.AllDeviceInstances,
+
+                    FilterType =
+                        CMNotifyFilterType.DeviceInstance,
+
+                    Reserved = 0,
+
+                    Data = new byte[400]
+                };
+
+            uint result =
+                CM_Register_Notification(
+                    ref filter,
+                    IntPtr.Zero,
+                    _callback,
+                    out IntPtr handle);
+
+            if (result != 0)
+            {
+                throw new InvalidOperationException(
+                    $"CM_Register_Notification failed. " +
+                    $"CONFIGRET: 0x{result:X8}");
+            }
+
+            _notificationHandle = handle;
         }
     }
 
-    private void UnregisterForDeviceNotifications()
+    private void ShutdownNativeNotifications()
     {
-        if (_notificationHandle == IntPtr.Zero)
+        Interlocked.Exchange(
+            ref _shutdownStarted,
+            1);
+
+        lock (_lifecycleLock)
         {
-            return;
+            if (_notificationHandle != IntPtr.Zero)
+            {
+                IntPtr handle =
+                    _notificationHandle;
+
+                _notificationHandle =
+                    IntPtr.Zero;
+
+                try
+                {
+                    uint result =
+                        CM_Unregister_Notification(
+                            handle);
+
+                    if (result != 0)
+                    {
+                        _logger.LogWarning(
+                            "CM_Unregister_Notification returned " +
+                            "CONFIGRET: 0x{Result:X8}.",
+                            result);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Error unregistering device notifications.");
+                }
+            }
         }
 
-        CM_Unregister_Notification(
-            _notificationHandle);
+        try
+        {
+            _callbacksCompleted.Wait(
+                TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Error waiting for native device callbacks to complete.");
+        }
 
-        _notificationHandle = IntPtr.Zero;
+        _channel.Writer.TryComplete();
     }
 
     private uint OnNativeDeviceEvent(
@@ -368,10 +433,21 @@ public class WindowsDeviceMonitorService : BackgroundService
         IntPtr eventData,
         uint eventDataSize)
     {
+        Interlocked.Increment(
+            ref _activeCallbacks);
+
+        _callbacksCompleted.Reset();
+
         try
         {
+            if (Volatile.Read(ref _shutdownStarted) != 0)
+            {
+                return 0;
+            }
+
             if (action !=
-                    CMNotifyAction.DeviceInstanceStarted &&
+                    CMNotifyAction.DeviceInstanceStarted
+                &&
                 action !=
                     CMNotifyAction.DeviceInstanceRemoved)
             {
@@ -395,8 +471,12 @@ public class WindowsDeviceMonitorService : BackgroundService
                 return 0;
             }
 
-            // Only USB events.
             if (!IsUsbInstance(instanceId))
+            {
+                return 0;
+            }
+
+            if (Volatile.Read(ref _shutdownStarted) != 0)
             {
                 return 0;
             }
@@ -410,9 +490,23 @@ public class WindowsDeviceMonitorService : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogError(
-                ex,
-                "Error processing USB device notification.");
+            try
+            {
+                _logger.LogError(
+                    ex,
+                    "Error processing native device notification.");
+            }
+            catch
+            {
+            }
+        }
+        finally
+        {
+            if (Interlocked.Decrement(
+                    ref _activeCallbacks) == 0)
+            {
+                _callbacksCompleted.Set();
+            }
         }
 
         return 0;

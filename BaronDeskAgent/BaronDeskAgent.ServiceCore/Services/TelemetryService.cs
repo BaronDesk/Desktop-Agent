@@ -3,13 +3,12 @@ using BaronDesk.Shared.Models;
 
 namespace BaronDeskAgent.ServiceCore.Services;
 
-public class TelemetryService : BackgroundService
+public sealed class TelemetryService : BackgroundService
 {
-    private readonly Channel<TelemetryEnvelope> _channel;
-
     private readonly ITelemetryTransport _transport;
-
     private readonly ILogger<TelemetryService> _logger;
+
+    private readonly Channel<TelemetryEnvelope> _channel;
 
     private long _sequence;
 
@@ -20,11 +19,16 @@ public class TelemetryService : BackgroundService
         _transport = transport;
         _logger = logger;
 
-        _channel = Channel.CreateUnbounded<TelemetryEnvelope>(
-            new UnboundedChannelOptions
+        _channel = Channel.CreateBounded<TelemetryEnvelope>(
+            new BoundedChannelOptions(256)
             {
                 SingleReader = true,
-                SingleWriter = false
+                SingleWriter = false,
+
+                // Important for a lightweight agent.
+                // If the consumer temporarily falls behind,
+                // don't allow unlimited memory growth.
+                FullMode = BoundedChannelFullMode.DropOldest
             });
     }
 
@@ -32,40 +36,39 @@ public class TelemetryService : BackgroundService
         HardwareTelemetry telemetry,
         CancellationToken cancellationToken = default)
     {
-        TelemetryEnvelope envelope = CreateEnvelope(
+        return PublishAsync(
             "telemetry",
-            telemetry);
-
-        return _channel.Writer.WriteAsync(
-            envelope,
+            telemetry,
             cancellationToken);
     }
 
-    public ValueTask PublishDeviceEventAsync(
+    public ValueTask PublishDeviceAsync(
         DeviceTelemetry telemetry,
         CancellationToken cancellationToken = default)
     {
-        TelemetryEnvelope envelope = CreateEnvelope(
+        return PublishAsync(
             "device_event",
-            telemetry);
+            telemetry,
+            cancellationToken);
+    }
+
+    private ValueTask PublishAsync<T>(
+        string type,
+        T payload,
+        CancellationToken cancellationToken)
+    {
+        var envelope = new TelemetryEnvelope
+        {
+            Type = type,
+            Id = Guid.NewGuid(),
+            Timestamp = DateTimeOffset.UtcNow,
+            Sequence = Interlocked.Increment(ref _sequence),
+            Payload = payload!
+        };
 
         return _channel.Writer.WriteAsync(
             envelope,
             cancellationToken);
-    }
-
-    private TelemetryEnvelope CreateEnvelope(
-        string type,
-        object payload)
-    {
-        return new TelemetryEnvelope
-        {
-            Type = type,
-            Id = Guid.NewGuid(),
-            Ts = DateTime.UtcNow,
-            Seq = Interlocked.Increment(ref _sequence),
-            Payload = payload
-        };
     }
 
     protected override async Task ExecuteAsync(
@@ -77,8 +80,8 @@ public class TelemetryService : BackgroundService
         try
         {
             await foreach (
-                TelemetryEnvelope envelope
-                in _channel.Reader.ReadAllAsync(stoppingToken))
+                var envelope in _channel.Reader.ReadAllAsync(
+                    stoppingToken))
             {
                 try
                 {
@@ -95,18 +98,21 @@ public class TelemetryService : BackgroundService
                 {
                     _logger.LogError(
                         ex,
-                        "Failed to send telemetry.");
+                        "Failed to send telemetry. " +
+                        "Type={Type}, Sequence={Sequence}, Id={Id}",
+                        envelope.Type,
+                        envelope.Sequence,
+                        envelope.Id);
                 }
             }
         }
         catch (OperationCanceledException)
+            when (stoppingToken.IsCancellationRequested)
         {
             // Normal shutdown.
         }
-        finally
-        {
-            _logger.LogInformation(
-                "Telemetry service stopped.");
-        }
+
+        _logger.LogInformation(
+            "Telemetry service stopped.");
     }
 }

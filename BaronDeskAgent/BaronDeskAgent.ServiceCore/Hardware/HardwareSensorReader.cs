@@ -152,12 +152,6 @@ public class HardwareSensorReader
                 .Where(s => s.Value.HasValue)
                 .ToList();
 
-        /*
-         * CPU TEMPERATURE
-         *
-         * We don't assume AMD or Intel.
-         * We look for the best available sensor.
-         */
         ISensor? temperatureSensor =
             sensors
                 .Where(s =>
@@ -173,12 +167,11 @@ public class HardwareSensorReader
         if (temperatureSensor is not null)
         {
             telemetry.Cpu.TemperatureC =
-                temperatureSensor.Value!.Value;
+                Math.Round(
+                    temperatureSensor.Value!.Value,
+                    2);
         }
 
-        /*
-         * CPU TOTAL LOAD
-         */
         ISensor? totalLoadSensor =
             sensors
                 .Where(s =>
@@ -195,14 +188,11 @@ public class HardwareSensorReader
                 totalLoadSensor.Name))
         {
             telemetry.Cpu.LoadPercent =
-                totalLoadSensor.Value!.Value;
+                Math.Round(
+                    totalLoadSensor.Value!.Value,
+                    2);
         }
 
-        /*
-         * CPU CORE MAX
-         *
-         * First try the explicit sensor.
-         */
         ISensor? coreMaxSensor =
             sensors.FirstOrDefault(s =>
                 s.SensorType ==
@@ -215,31 +205,31 @@ public class HardwareSensorReader
         if (coreMaxSensor is not null)
         {
             telemetry.Cpu.CoreMaxLoadPercent =
-                coreMaxSensor.Value!.Value;
+                Math.Round(
+                    coreMaxSensor.Value!.Value,
+                    2);
 
             return;
         }
 
-        /*
-         * Otherwise calculate the maximum
-         * from individual core sensors.
-         */
         List<double> coreLoads =
             sensors
-            .Where(s =>
-                s.SensorType ==
-                    SensorType.Load &&
-                s.Value.HasValue &&
-                IsCpuCoreLoadSensor(
-                    s.Name))
-            .Select(
-                s => (double)s.Value!.Value)
-            .ToList();
+                .Where(s =>
+                    s.SensorType ==
+                        SensorType.Load &&
+                    s.Value.HasValue &&
+                    IsCpuCoreLoadSensor(
+                        s.Name))
+                .Select(
+                    s => (double)s.Value!.Value)
+                .ToList();
 
         if (coreLoads.Count > 0)
         {
             telemetry.Cpu.CoreMaxLoadPercent =
-                coreLoads.Max();
+                Math.Round(
+                    coreLoads.Max(),
+                    2);
         }
     }
 
@@ -268,14 +258,18 @@ public class HardwareSensorReader
                         StringComparison.OrdinalIgnoreCase))
                 {
                     telemetry.Ram.UsedGb =
-                        value;
+                        Math.Round(
+                            value,
+                            2);
                 }
                 else if (name.Equals(
                     "Memory Available",
                     StringComparison.OrdinalIgnoreCase))
                 {
                     telemetry.Ram.AvailableGb =
-                        value;
+                        Math.Round(
+                            value,
+                            2);
                 }
             }
             else if (sensor.SensorType ==
@@ -286,7 +280,9 @@ public class HardwareSensorReader
                         StringComparison.OrdinalIgnoreCase))
                 {
                     telemetry.Ram.UsagePercent =
-                        value;
+                        Math.Round(
+                            value,
+                            2);
                 }
             }
         }
@@ -356,6 +352,8 @@ public class HardwareSensorReader
         double value,
         GpuTelemetry gpu)
     {
+        value = Math.Round(value, 2);
+
         if (name.Equals(
                 "GPU Core",
                 StringComparison.OrdinalIgnoreCase))
@@ -400,7 +398,9 @@ public class HardwareSensorReader
                 StringComparison.OrdinalIgnoreCase))
         {
             gpu.LoadPercent =
-                value;
+                Math.Round(
+                    value,
+                    2);
         }
     }
 
@@ -409,6 +409,8 @@ public class HardwareSensorReader
         double value,
         GpuTelemetry gpu)
     {
+        value = Math.Round(value, 2);
+
         if (name.Equals(
                 "GPU Memory Used",
                 StringComparison.OrdinalIgnoreCase))
@@ -449,7 +451,10 @@ public class HardwareSensorReader
                 new FanTelemetry
                 {
                     Name = sensor.Name,
-                    SpeedRpm = sensor.Value.Value
+                    SpeedRpm =
+                        Math.Round(
+                            sensor.Value.Value,
+                            2)
                 });
         }
     }
@@ -588,16 +593,20 @@ public class HardwareSensorReader
             telemetry.Ram.AvailableGb.HasValue)
         {
             telemetry.Ram.TotalGb =
-                telemetry.Ram.UsedGb.Value +
-                telemetry.Ram.AvailableGb.Value;
+                Math.Round(
+                    telemetry.Ram.UsedGb.Value +
+                    telemetry.Ram.AvailableGb.Value,
+                    2);
 
             if (!telemetry.Ram.UsagePercent.HasValue &&
                 telemetry.Ram.TotalGb.Value > 0)
             {
                 telemetry.Ram.UsagePercent =
-                    telemetry.Ram.UsedGb.Value /
-                    telemetry.Ram.TotalGb.Value *
-                    100.0;
+                    Math.Round(
+                        telemetry.Ram.UsedGb.Value /
+                        telemetry.Ram.TotalGb.Value *
+                        100.0,
+                        2);
             }
         }
     }
