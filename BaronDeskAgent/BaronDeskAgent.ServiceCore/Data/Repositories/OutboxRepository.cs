@@ -7,8 +7,7 @@ public sealed class OutboxRepository
 {
     private readonly AgentDatabase _database;
 
-    public OutboxRepository(
-        AgentDatabase database)
+    public OutboxRepository(AgentDatabase database)
     {
         _database = database;
     }
@@ -20,8 +19,7 @@ public sealed class OutboxRepository
         await using var connection =
             _database.CreateConnection();
 
-        await connection.OpenAsync(
-            cancellationToken);
+        await connection.OpenAsync(cancellationToken);
 
         await using var command =
             connection.CreateCommand();
@@ -70,14 +68,125 @@ public sealed class OutboxRepository
             cancellationToken);
     }
 
+    public async Task<IReadOnlyList<OutboxMessageEntity>> GetPendingAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var messages =
+            new List<OutboxMessageEntity>();
+
+        await using var connection =
+            _database.CreateConnection();
+
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            SELECT
+                Id,
+                Type,
+                Payload,
+                CreatedAt,
+                Attempts
+            FROM OutboxMessages
+            ORDER BY CreatedAt ASC
+            LIMIT $limit;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$limit",
+            limit);
+
+        await using var reader =
+            await command.ExecuteReaderAsync(
+                cancellationToken);
+
+        while (await reader.ReadAsync(
+            cancellationToken))
+        {
+            messages.Add(
+                new OutboxMessageEntity
+                {
+                    Id = Guid.Parse(
+                        reader.GetString(0)),
+
+                    Type = reader.GetString(1),
+
+                    Payload = reader.GetString(2),
+
+                    CreatedAt = DateTimeOffset.Parse(
+                        reader.GetString(3)),
+
+                    Attempts = reader.GetInt32(4)
+                });
+        }
+
+        return messages;
+    }
+
+    public async Task MarkSentAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection =
+            _database.CreateConnection();
+
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            DELETE FROM OutboxMessages
+            WHERE Id = $id;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$id",
+            id.ToString());
+
+        await command.ExecuteNonQueryAsync(
+            cancellationToken);
+    }
+
+    public async Task IncrementAttemptsAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection =
+            _database.CreateConnection();
+
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command =
+            connection.CreateCommand();
+
+        command.CommandText =
+            """
+            UPDATE OutboxMessages
+            SET Attempts = Attempts + 1
+            WHERE Id = $id;
+            """;
+
+        command.Parameters.AddWithValue(
+            "$id",
+            id.ToString());
+
+        await command.ExecuteNonQueryAsync(
+            cancellationToken);
+    }
+
     public async Task<int> GetCountAsync(
         CancellationToken cancellationToken = default)
     {
         await using var connection =
             _database.CreateConnection();
 
-        await connection.OpenAsync(
-            cancellationToken);
+        await connection.OpenAsync(cancellationToken);
 
         await using var command =
             connection.CreateCommand();

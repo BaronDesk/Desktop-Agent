@@ -1,11 +1,14 @@
 ﻿using System.Threading.Channels;
 using BaronDesk.Shared.Models;
+using BaronDeskAgent.ServiceCore.Data.Entities;
+using BaronDeskAgent.ServiceCore.Data.Repositories;
 
 namespace BaronDeskAgent.ServiceCore.Services;
 
 public sealed class TelemetryService : BackgroundService
 {
     private readonly ITelemetryTransport _transport;
+    private readonly OutboxRepository _outboxRepository;
     private readonly ILogger<TelemetryService> _logger;
 
     private readonly Channel<TelemetryEnvelope> _channel;
@@ -14,9 +17,11 @@ public sealed class TelemetryService : BackgroundService
 
     public TelemetryService(
         ITelemetryTransport transport,
+        OutboxRepository outboxRepository,
         ILogger<TelemetryService> logger)
     {
         _transport = transport;
+        _outboxRepository = outboxRepository;
         _logger = logger;
 
         _channel = Channel.CreateBounded<TelemetryEnvelope>(
@@ -52,7 +57,7 @@ public sealed class TelemetryService : BackgroundService
             cancellationToken);
     }
 
-    private ValueTask PublishAsync<T>(
+    private async ValueTask PublishAsync<T>(
         string type,
         T payload,
         CancellationToken cancellationToken)
@@ -66,7 +71,37 @@ public sealed class TelemetryService : BackgroundService
             Payload = payload!
         };
 
-        return _channel.Writer.WriteAsync(
+        /*
+         * Important messages must be persisted before
+         * entering the in-memory channel.
+         *
+         * Normal telemetry remains live-only.
+         */
+        if (TelemetryMessagePolicy.RequiresOutbox(type))
+        {
+            var outboxMessage = new OutboxMessageEntity
+            {
+                Id = envelope.Id,
+                Type = envelope.Type,
+                Payload = System.Text.Json.JsonSerializer.Serialize(
+                    envelope),
+                CreatedAt = envelope.Timestamp,
+                Attempts = 0
+            };
+
+            await _outboxRepository.InsertAsync(
+                outboxMessage,
+                cancellationToken);
+
+            _logger.LogDebug(
+                "Important message stored in outbox. " +
+                "Type={Type}, Sequence={Sequence}, Id={Id}",
+                envelope.Type,
+                envelope.Sequence,
+                envelope.Id);
+        }
+
+        await _channel.Writer.WriteAsync(
             envelope,
             cancellationToken);
     }
