@@ -1,10 +1,12 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Text;
 
 namespace BaronDesk.Shared.Contracts
 {
-    internal class AgentMessage
+    public class AgentMessage
     {
+        public MessageType Type { get; set; }
+        public string StationId { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+        public object? Payload { get; set; } // TelemetryPayload, CommandRequest, etc. depending on Type
     }
 }
