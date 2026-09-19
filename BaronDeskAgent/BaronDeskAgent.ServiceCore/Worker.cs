@@ -1,5 +1,6 @@
 using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Commands;
+using BaronDeskAgent.ServiceCore.Services.Commands;
 
 namespace BaronDeskAgent.ServiceCore;
 
@@ -7,13 +8,16 @@ public sealed class Worker : BackgroundService
 {
     private readonly ILogger<Worker> _logger;
     private readonly CommandService _commandService;
+    private readonly LockService _lockService;
 
     public Worker(
         ILogger<Worker> logger,
-        CommandService commandService)
+        CommandService commandService,
+        LockService lockService)
     {
         _logger = logger;
         _commandService = commandService;
+        _lockService = lockService;
     }
 
     protected override async Task ExecuteAsync(
@@ -21,6 +25,10 @@ public sealed class Worker : BackgroundService
     {
         _logger.LogInformation(
             "BaronDesk Agent ServiceCore started.");
+
+        _logger.LogInformation(
+            "Lock state before command: {IsLocked}",
+            _lockService.IsLocked);
 
         var command = new CommandRequest
         {
@@ -38,6 +46,10 @@ public sealed class Worker : BackgroundService
             response.CommandId,
             response.Success,
             response.Error);
+
+        _logger.LogInformation(
+            "Lock state after command: {IsLocked}",
+            _lockService.IsLocked);
 
         await Task.Delay(
             Timeout.Infinite,

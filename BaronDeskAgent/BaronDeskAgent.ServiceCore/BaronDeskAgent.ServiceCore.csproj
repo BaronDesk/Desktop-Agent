@@ -18,6 +18,8 @@
     <Folder Include="Communication\" />
     <Folder Include="Configuration\" />
     <Folder Include="Security\" />
+    <Folder Include="Services\Games\" />
+    <Folder Include="Services\Session\" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
+using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 namespace BaronDeskAgent.ServiceCore.Services.Outbox;
 

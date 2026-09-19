@@ -3,31 +3,31 @@ using BaronDeskAgent.ServiceCore.Services.Commands;
 
 namespace BaronDeskAgent.ServiceCore.Commands.Handlers;
 
-public sealed class LockCommandHandler : ICommandHandler
+public sealed class UnlockCommandHandler : ICommandHandler
 {
     private readonly LockService _lockService;
-    private readonly ILogger<LockCommandHandler> _logger;
+    private readonly ILogger<UnlockCommandHandler> _logger;
 
-    public LockCommandHandler(
+    public UnlockCommandHandler(
         LockService lockService,
-        ILogger<LockCommandHandler> logger)
+        ILogger<UnlockCommandHandler> logger)
     {
         _lockService = lockService;
         _logger = logger;
     }
 
     public string CommandType =>
-        CommandTypes.Lock;
+        CommandTypes.Unlock;
 
     public async Task<CommandResponse> HandleAsync(
         CommandRequest command,
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation(
-            "Handling LOCK command. CommandId={CommandId}",
+            "Handling UNLOCK command. CommandId={CommandId}",
             command.Id);
 
-        await _lockService.LockAsync(
+        await _lockService.UnlockAsync(
             cancellationToken);
 
         return new CommandResponse

@@ -3,7 +3,7 @@ using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Data.Entities;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
 
-namespace BaronDeskAgent.ServiceCore.Services;
+namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 public sealed class TelemetryService : BackgroundService
 {
