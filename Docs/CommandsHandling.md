@@ -1,4 +1,4 @@
-# BaronDesk Agent — Command Handling Architecture
+# BaronDesk Agent : Command Handling Architecture
 
 This document describes the current implementation and architecture of command handling in `BaronDeskAgent.ServiceCore`.
 
