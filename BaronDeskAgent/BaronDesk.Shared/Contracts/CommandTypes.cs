@@ -4,7 +4,10 @@ using System.Text;
 
 namespace BaronDesk.Shared.Contracts
 {
-    internal class CommandTypes
+    public enum CommandType
     {
+        Lock,
+        Unlock,
+        Shutdown
     }
 }
