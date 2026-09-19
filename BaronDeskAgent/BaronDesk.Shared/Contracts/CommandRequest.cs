@@ -1,11 +1,10 @@
-﻿using System;
+﻿namespace BaronDesk.Shared.Contracts;
 
-namespace BaronDesk.Shared.Contracts
+public sealed class CommandRequest
 {
-    public class CommandRequest
-    {
-        public Guid CommandId { get; set; } = Guid.NewGuid();
-        public CommandType Command { get; set; }
-        public DateTime IssuedAt { get; set; } = DateTime.UtcNow;
-    }
+    public required Guid Id { get; init; }
+
+    public required string Type { get; init; }
+
+    public object? Payload { get; init; }
 }

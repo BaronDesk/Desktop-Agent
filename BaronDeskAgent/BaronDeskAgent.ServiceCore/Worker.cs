@@ -1,27 +1,46 @@
+using BaronDesk.Shared.Contracts;
+using BaronDeskAgent.ServiceCore.Commands;
+
 namespace BaronDeskAgent.ServiceCore;
 
-public class Worker : BackgroundService
+public sealed class Worker : BackgroundService
 {
     private readonly ILogger<Worker> _logger;
+    private readonly CommandService _commandService;
 
-    public Worker(ILogger<Worker> logger)
+    public Worker(
+        ILogger<Worker> logger,
+        CommandService commandService)
     {
         _logger = logger;
+        _commandService = commandService;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(
+        CancellationToken stoppingToken)
     {
-        _logger.LogInformation("BaronDesk Agent ServiceCore started.");
+        _logger.LogInformation(
+            "BaronDesk Agent ServiceCore started.");
 
-        while (!stoppingToken.IsCancellationRequested)
+        var command = new CommandRequest
         {
-            _logger.LogInformation(
-                "BaronDesk Agent is running at {Time}",
-                DateTimeOffset.Now);
+            Id = Guid.NewGuid(),
+            Type = CommandTypes.Lock
+        };
 
-            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-        }
+        var response =
+            await _commandService.HandleAsync(
+                command,
+                stoppingToken);
 
-        _logger.LogInformation("BaronDesk Agent ServiceCore stopped.");
+        _logger.LogInformation(
+            "Command result. Id={CommandId}, Success={Success}, Error={Error}",
+            response.CommandId,
+            response.Success,
+            response.Error);
+
+        await Task.Delay(
+            Timeout.Infinite,
+            stoppingToken);
     }
 }
