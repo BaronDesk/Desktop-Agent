@@ -5,6 +5,7 @@ using BaronDeskAgent.ServiceCore.Hardware;
 using BaronDeskAgent.ServiceCore.Services;
 using BaronDeskAgent.ServiceCore.Services.Outbox;
 using BaronDeskAgent.ServiceCore.Commands;
+using BaronDeskAgent.ServiceCore.Commands.Handlers;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -49,6 +50,7 @@ builder.Services.AddHostedService<OutboxWorker>();
 // Commands
 // ---------------------------------------------------------
 
+builder.Services.AddSingleton<ICommandHandler, LockCommandHandler>();
 builder.Services.AddSingleton<CommandService>();
 
 // ---------------------------------------------------------

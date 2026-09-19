@@ -1,4 +1,5 @@
 ﻿using BaronDesk.Shared.Contracts;
+using BaronDeskAgent.ServiceCore.Commands.Handlers;
 
 namespace BaronDeskAgent.ServiceCore.Commands;
 
@@ -6,10 +7,18 @@ public sealed class CommandService
 {
     private readonly ILogger<CommandService> _logger;
 
+    private readonly IReadOnlyDictionary<string, ICommandHandler>
+        _handlers;
+
     public CommandService(
+        IEnumerable<ICommandHandler> handlers,
         ILogger<CommandService> logger)
     {
         _logger = logger;
+
+        _handlers = handlers.ToDictionary(
+            handler => handler.CommandType,
+            StringComparer.OrdinalIgnoreCase);
     }
 
     public async Task<CommandResponse> HandleAsync(
@@ -21,145 +30,49 @@ public sealed class CommandService
             command.Type,
             command.Id);
 
-        return command.Type switch
+        if (!_handlers.TryGetValue(
+                command.Type,
+                out var handler))
         {
-            CommandTypes.Lock =>
-                await HandleLockAsync(
-                    command,
-                    cancellationToken),
+            _logger.LogWarning(
+                "Unknown command type. Type={CommandType}, Id={CommandId}",
+                command.Type,
+                command.Id);
 
-            CommandTypes.Unlock =>
-                await HandleUnlockAsync(
-                    command,
-                    cancellationToken),
+            return new CommandResponse
+            {
+                CommandId = command.Id,
+                Success = false,
+                Error = $"Unknown command type: {command.Type}"
+            };
+        }
 
-            CommandTypes.EndSession =>
-                await HandleEndSessionAsync(
-                    command,
-                    cancellationToken),
-
-            CommandTypes.LaunchGame =>
-                await HandleLaunchGameAsync(
-                    command,
-                    cancellationToken),
-
-            CommandTypes.StopGame =>
-                await HandleStopGameAsync(
-                    command,
-                    cancellationToken),
-
-            CommandTypes.Shutdown =>
-                await HandleShutdownAsync(
-                    command,
-                    cancellationToken),
-
-            CommandTypes.Restart =>
-                await HandleRestartAsync(
-                    command,
-                    cancellationToken),
-
-            _ => CreateFailureResponse(
+        try
+        {
+            return await handler.HandleAsync(
                 command,
-                $"Unknown command type: {command.Type}")
-        };
-    }
-
-    private Task<CommandResponse> HandleLockAsync(
-        CommandRequest command,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogInformation(
-            "LOCK command received.");
-
-        return Task.FromResult(
-            CreateSuccessResponse(command));
-    }
-
-    private Task<CommandResponse> HandleUnlockAsync(
-        CommandRequest command,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogInformation(
-            "UNLOCK command received.");
-
-        return Task.FromResult(
-            CreateSuccessResponse(command));
-    }
-
-    private Task<CommandResponse> HandleEndSessionAsync(
-        CommandRequest command,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogInformation(
-            "END_SESSION command received.");
-
-        return Task.FromResult(
-            CreateSuccessResponse(command));
-    }
-
-    private Task<CommandResponse> HandleLaunchGameAsync(
-        CommandRequest command,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogInformation(
-            "LAUNCH_GAME command received.");
-
-        return Task.FromResult(
-            CreateSuccessResponse(command));
-    }
-
-    private Task<CommandResponse> HandleStopGameAsync(
-        CommandRequest command,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogInformation(
-            "STOP_GAME command received.");
-
-        return Task.FromResult(
-            CreateSuccessResponse(command));
-    }
-
-    private Task<CommandResponse> HandleShutdownAsync(
-        CommandRequest command,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogInformation(
-            "SHUTDOWN command received.");
-
-        return Task.FromResult(
-            CreateSuccessResponse(command));
-    }
-
-    private Task<CommandResponse> HandleRestartAsync(
-        CommandRequest command,
-        CancellationToken cancellationToken)
-    {
-        _logger.LogInformation(
-            "RESTART command received.");
-
-        return Task.FromResult(
-            CreateSuccessResponse(command));
-    }
-
-    private static CommandResponse CreateSuccessResponse(
-        CommandRequest command)
-    {
-        return new CommandResponse
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
         {
-            CommandId = command.Id,
-            Success = true
-        };
-    }
-
-    private static CommandResponse CreateFailureResponse(
-        CommandRequest command,
-        string error)
-    {
-        return new CommandResponse
+            throw;
+        }
+        catch (Exception ex)
         {
-            CommandId = command.Id,
-            Success = false,
-            Error = error
-        };
+            _logger.LogError(
+                ex,
+                "Command execution failed. " +
+                "Type={CommandType}, Id={CommandId}",
+                command.Type,
+                command.Id);
+
+            return new CommandResponse
+            {
+                CommandId = command.Id,
+                Success = false,
+                Error = "Command execution failed."
+            };
+        }
     }
 }
