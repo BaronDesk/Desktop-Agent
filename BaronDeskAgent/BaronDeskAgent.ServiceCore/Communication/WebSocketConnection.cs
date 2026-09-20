@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Configuration;
+using BaronDeskAgent.ServiceCore.Services.Enrollment;
 using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Communication;
@@ -11,6 +12,7 @@ namespace BaronDeskAgent.ServiceCore.Communication;
 public sealed class WebSocketConnection : IServerConnection, IDisposable
 {
     private readonly IOptions<AgentOptions> _options;
+    private readonly EnrollmentService _enrollmentService;
     private readonly ILogger<WebSocketConnection> _logger;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly SemaphoreSlim _connectLock = new(1, 1);
@@ -21,9 +23,11 @@ public sealed class WebSocketConnection : IServerConnection, IDisposable
 
     public WebSocketConnection(
         IOptions<AgentOptions> options,
+        EnrollmentService enrollmentService,
         ILogger<WebSocketConnection> logger)
     {
         _options = options;
+        _enrollmentService = enrollmentService;
         _logger = logger;
     }
 
@@ -243,9 +247,14 @@ public sealed class WebSocketConnection : IServerConnection, IDisposable
 
     private void ConfigureHeadersAndOptions(ClientWebSocket ws)
     {
-        if (!string.IsNullOrWhiteSpace(_options.Value.StationToken))
+        // Priority: DPAPI-stored JWT (enrolled) > appsettings fallback > no header
+        var token = _enrollmentService.StationJwt ?? _options.Value.StationToken;
+
+        if (!string.IsNullOrWhiteSpace(token))
         {
-            ws.Options.SetRequestHeader("Authorization", $"Bearer {_options.Value.StationToken}");
+            ws.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+            _logger.LogDebug("Authorization header set for WebSocket upgrade. Source={Source}",
+                _enrollmentService.StationJwt is not null ? "DPAPI" : "appsettings");
         }
 
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(_options.Value.KeepAliveIntervalSeconds);

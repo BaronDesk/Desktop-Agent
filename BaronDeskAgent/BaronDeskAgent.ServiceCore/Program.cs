@@ -8,6 +8,7 @@ using BaronDeskAgent.ServiceCore.Hardware;
 using BaronDeskAgent.ServiceCore.Security;
 using BaronDeskAgent.ServiceCore.Services;
 using BaronDeskAgent.ServiceCore.Services.Commands;
+using BaronDeskAgent.ServiceCore.Services.Enrollment;
 using BaronDeskAgent.ServiceCore.Services.Games;
 using BaronDeskAgent.ServiceCore.Services.Outbox;
 using BaronDeskAgent.ServiceCore.Services.Session;
@@ -40,6 +41,13 @@ builder.Services.AddSingleton<OutboxRepository>();
 builder.Services.AddSingleton<ReplayGuard>();
 
 builder.Services.AddSingleton<IdempotencyTracker>();
+
+if (OperatingSystem.IsWindows())
+{
+    builder.Services.AddSingleton<IStationCredentialStore, DpapiCredentialStore>();
+}
+
+builder.Services.AddSingleton<EnrollmentService>();
 
 builder.Services.AddSingleton<IServerConnection, WebSocketConnection>();
 
@@ -119,6 +127,12 @@ using (var scope = host.Services.CreateScope())
             .GetRequiredService<DatabaseInitializer>();
 
     await databaseInitializer.InitializeAsync();
+
+    var enrollmentService =
+        scope.ServiceProvider
+            .GetRequiredService<EnrollmentService>();
+
+    await enrollmentService.InitializeAsync();
 }
 
 // ---------------------------------------------------------

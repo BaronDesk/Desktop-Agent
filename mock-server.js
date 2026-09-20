@@ -48,7 +48,14 @@ server.on('upgrade', (req, socket, head) => {
     socket.write(headers.join('\r\n') + '\r\n\r\n');
     activeSocket = socket;
 
-    console.log('\n\x1b[32m[CONNECTED]\x1b[0m Agent connected from ' + socket.remoteAddress);
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+        console.log(`\n\x1b[32m[AUTH]\x1b[0m Upgrade request contains Authorization: \x1b[36m${authHeader}\x1b[0m`);
+    } else {
+        console.log('\n\x1b[33m[AUTH]\x1b[0m Upgrade request contains NO Authorization header (unenrolled or fallback).');
+    }
+
+    console.log('\x1b[32m[CONNECTED]\x1b[0m Agent connected from ' + socket.remoteAddress);
     printMenu();
 
     let buffer = Buffer.alloc(0);
@@ -231,6 +238,27 @@ function handleTextMessage(text, socket) {
             }
         } else if (type === 'device_event') {
             console.log(`\x1b[33m[DEVICE_EVENT]\x1b[0m ${env.payload?.eventType}: ${env.payload?.deviceName}`);
+        } else if (type === 'enroll_request') {
+            console.log('\x1b[32m[ENROLL_REQUEST RECEIVED]\x1b[0m Bootstrap Token:', env.payload?.bootstrapToken);
+            console.log('Station Metadata:', JSON.stringify(env.payload, null, 2));
+
+            // Generate mock station JWT and respond with enroll_response
+            const mockJwt = 'mock.jwt.' + Buffer.from(JSON.stringify({
+                stationId: crypto.randomUUID(),
+                serial: env.payload?.serialNumber,
+                role: 'station',
+                iat: Math.floor(Date.now() / 1000),
+                exp: Math.floor(Date.now() / 1000) + 86400 * 365
+            })).toString('base64url');
+
+            const assignedStationId = crypto.randomUUID();
+            sendEnvelope('enroll_response', {
+                stationId: assignedStationId,
+                stationJwt: mockJwt,
+                status: 'ENROLLED',
+                message: 'Station successfully enrolled by mock server.'
+            });
+            console.log(`\x1b[32m[ENROLL_RESPONSE SENT]\x1b[0m Assigned StationId=${assignedStationId}`);
         } else {
             console.log('Payload:', JSON.stringify(env.payload));
         }
@@ -247,13 +275,15 @@ function printMenu() {
     console.log('BaronDesk Mock Server - Interactive Menu');
     console.log('----------------------------------------');
     console.log(' [1] Send LOCK');
-    console.log(' [2] Send UNLOCK (Starts session & grants lease)');
+    console.log(' [2] Send UNLOCK (Direct - admin dashboard)');
     console.log(' [3] Send LAUNCH_GAME (gameId: "cs2")');
     console.log(' [4] Send END_SESSION (Ends session & revokes lease)');
     console.log(' [5] Send POLICY_UPDATE');
     console.log(' [6] Send SHUTDOWN');
     console.log(' [7] Test Anti-Replay: Send STALE seq');
     console.log(' [8] Test Unknown Command (Trigger NACK)');
+    console.log(' [9] Send UNLOCK with PIN (Booking unlock)');
+    console.log(' [0] Simulate Enrollment Rejection');
     console.log(' [q] Quit');
     console.log('----------------------------------------');
 }
@@ -271,7 +301,7 @@ rl.on('line', (line) => {
             break;
         case '2':
             currentSessionId = crypto.randomUUID();
-            console.log(`\nUnlocking station with SessionId=${currentSessionId}`);
+            console.log(`\nUnlocking station (direct) with SessionId=${currentSessionId}`);
             sendEnvelope('UNLOCK', { sessionId: currentSessionId });
             break;
         case '3':
@@ -294,6 +324,22 @@ rl.on('line', (line) => {
         case '8':
             console.log('\nSending invalid command type "UNKNOWN_TEST"...');
             sendEnvelope('UNKNOWN_TEST', null);
+            break;
+        case '9': {
+            currentSessionId = crypto.randomUUID();
+            const pin = '482917';
+            console.log(`\nUnlocking station (booking PIN) with SessionId=${currentSessionId}, PIN=${pin}`);
+            sendEnvelope('UNLOCK', { sessionId: currentSessionId, pin: pin });
+            break;
+        }
+        case '0':
+            console.log('\nSimulating enrollment rejection...');
+            sendEnvelope('enroll_response', {
+                stationId: crypto.randomUUID(),
+                stationJwt: '',
+                status: 'REJECTED',
+                message: 'Bootstrap token invalid or expired.'
+            });
             break;
         case 'q':
             console.log('Exiting mock server...');

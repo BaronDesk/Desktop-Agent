@@ -36,6 +36,7 @@ public sealed class UnlockCommandHandler : ICommandHandler
             command.Id);
 
         Guid sessionId = Guid.NewGuid();
+        string? pin = null;
 
         if (command.Payload is JsonElement je)
         {
@@ -51,6 +52,12 @@ public sealed class UnlockCommandHandler : ICommandHandler
                 {
                     sessionId = objGuid;
                 }
+
+                if ((je.TryGetProperty("pin", out var pinProp) || je.TryGetProperty("Pin", out pinProp)) &&
+                    pinProp.ValueKind == JsonValueKind.String)
+                {
+                    pin = pinProp.GetString();
+                }
             }
         }
         else if (command.Payload is string str && Guid.TryParse(str, out var parsedGuid))
@@ -58,10 +65,23 @@ public sealed class UnlockCommandHandler : ICommandHandler
             sessionId = parsedGuid;
         }
 
-        await _sessionService.StartSessionAsync(sessionId, cancellationToken);
-        await _lockService.UnlockAsync(cancellationToken);
+        await _sessionService.StartSessionAsync(sessionId, pin, cancellationToken);
 
-        // Grant initial authorization lease on unlock
+        if (string.IsNullOrWhiteSpace(pin))
+        {
+            // Direct unlock (admin dashboard action)
+            await _lockService.UnlockAsync(cancellationToken);
+            _logger.LogInformation("Workstation unlocked directly for SessionId={SessionId}.", sessionId);
+        }
+        else
+        {
+            // Booking unlock: Station remains locked until user enters PIN at the station
+            _logger.LogInformation(
+                "Workstation remains locked for SessionId={SessionId}. PIN entry required by user.",
+                sessionId);
+        }
+
+        // Grant initial authorization lease on unlock command
         _leaseManager.UpdateLease(null);
 
         return new CommandResponse

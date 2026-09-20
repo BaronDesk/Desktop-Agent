@@ -31,6 +31,18 @@ public sealed class AgentOptions
     public string? StationToken { get; set; }
 
     /// <summary>
+    /// One-time bootstrap token for initial station enrollment.
+    /// Provided by the admin dashboard. Cleared after successful enrollment.
+    /// </summary>
+    public string? BootstrapToken { get; set; }
+
+    /// <summary>
+    /// Override path for the DPAPI-protected credential file.
+    /// Defaults to %ProgramData%\BaronDesk\station.dat if not set.
+    /// </summary>
+    public string? StationDataPath { get; set; }
+
+    /// <summary>
     /// Initial delay before reconnection attempt in seconds.
     /// </summary>
     public double ReconnectBaseDelaySeconds { get; set; } = 2.0;

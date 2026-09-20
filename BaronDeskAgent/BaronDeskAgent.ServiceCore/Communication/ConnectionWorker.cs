@@ -5,6 +5,7 @@ using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Security;
 using BaronDeskAgent.ServiceCore.Services.Commands;
+using BaronDeskAgent.ServiceCore.Services.Enrollment;
 using BaronDeskAgent.ServiceCore.Services.Session;
 using Microsoft.Extensions.Options;
 
@@ -30,6 +31,7 @@ public sealed class ConnectionWorker : BackgroundService
     private readonly LockService _lockService;
     private readonly SessionService _sessionService;
     private readonly LeaseManager _leaseManager;
+    private readonly EnrollmentService _enrollmentService;
     private readonly IOptions<AgentOptions> _options;
     private readonly ILogger<ConnectionWorker> _logger;
 
@@ -41,6 +43,7 @@ public sealed class ConnectionWorker : BackgroundService
         LockService lockService,
         SessionService sessionService,
         LeaseManager leaseManager,
+        EnrollmentService enrollmentService,
         IOptions<AgentOptions> options,
         ILogger<ConnectionWorker> logger)
     {
@@ -51,6 +54,7 @@ public sealed class ConnectionWorker : BackgroundService
         _lockService = lockService;
         _sessionService = sessionService;
         _leaseManager = leaseManager;
+        _enrollmentService = enrollmentService;
         _options = options;
         _logger = logger;
     }
@@ -58,6 +62,8 @@ public sealed class ConnectionWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("BaronDesk ConnectionWorker started.");
+
+        await _enrollmentService.InitializeAsync();
 
         int retryAttempt = 0;
 
@@ -165,6 +171,22 @@ public sealed class ConnectionWorker : BackgroundService
             stateReport.LeaseExpiresAt);
     }
 
+    private async Task SendEnrollRequestAsync(CancellationToken cancellationToken)
+    {
+        var request = _enrollmentService.BuildEnrollmentRequest();
+        var envelope = new Envelope<EnrollmentRequest>
+        {
+            Type = MessageTypes.EnrollRequest,
+            Id = Guid.NewGuid(),
+            Ts = DateTimeOffset.UtcNow,
+            Seq = _connection.NextSequence(),
+            Payload = request
+        };
+
+        await _connection.SendAsync(envelope, cancellationToken);
+        _logger.LogInformation("Enrollment request sent. SerialNumber={Serial}", request.SerialNumber);
+    }
+
     private async Task RunReceiveLoopAsync(CancellationToken stoppingToken)
     {
         while (_connection.IsConnected && !stoppingToken.IsCancellationRequested)
@@ -191,7 +213,46 @@ public sealed class ConnectionWorker : BackgroundService
         if (envelope.Type.Equals(MessageTypes.HandshakeAck, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogInformation("Handshake acknowledged by server.");
+
+            if (!_enrollmentService.IsEnrolled && _enrollmentService.ShouldAttemptEnrollment)
+            {
+                _logger.LogInformation("Station is not enrolled. Initiating enrollment flow with bootstrap token...");
+                await SendEnrollRequestAsync(cancellationToken);
+                return;
+            }
+
             await SendStateReportAsync(cancellationToken);
+            return;
+        }
+
+        if (envelope.Type.Equals(MessageTypes.EnrollResponse, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("Enrollment response received from server.");
+            try
+            {
+                var enrollResponse = JsonSerializer.Deserialize(
+                    envelope.Payload,
+                    AgentJsonContext.Default.EnrollmentResponse);
+
+                if (enrollResponse is not null)
+                {
+                    await _enrollmentService.HandleEnrollmentResponseAsync(enrollResponse);
+
+                    if (_enrollmentService.IsEnrolled)
+                    {
+                        _logger.LogInformation("Station enrolled successfully. Reconnecting with station JWT...");
+                        await _connection.DisconnectAsync(cancellationToken);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to deserialize enroll_response payload.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing enroll_response.");
+            }
             return;
         }
 
