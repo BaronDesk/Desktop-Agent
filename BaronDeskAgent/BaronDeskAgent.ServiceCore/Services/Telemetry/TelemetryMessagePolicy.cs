@@ -1,4 +1,4 @@
-﻿namespace BaronDeskAgent.ServiceCore.Services;
+﻿namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 public static class TelemetryMessagePolicy
 {

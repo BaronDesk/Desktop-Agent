@@ -2,8 +2,9 @@
 using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Data.Entities;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
+using System.Text.Json;
 
-namespace BaronDeskAgent.ServiceCore.Services;
+namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 public sealed class TelemetryService : BackgroundService
 {
@@ -83,8 +84,7 @@ public sealed class TelemetryService : BackgroundService
             {
                 Id = envelope.Id,
                 Type = envelope.Type,
-                Payload = System.Text.Json.JsonSerializer.Serialize(
-                    envelope),
+                Payload = JsonSerializer.Serialize(envelope),
                 CreatedAt = envelope.Timestamp,
                 Attempts = 0
             };

@@ -1,4 +1,4 @@
-# BaronDesk Agent — Hardware Telemetry & Outbox
+# BaronDesk Agent : Hardware Telemetry & Outbox
 
 This document describes the current implementation of hardware telemetry
 and the SQLite outbox in `BaronDeskAgent.ServiceCore`.

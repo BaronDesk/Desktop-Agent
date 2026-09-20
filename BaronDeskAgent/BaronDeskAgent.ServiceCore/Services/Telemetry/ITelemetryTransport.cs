@@ -1,6 +1,6 @@
 ﻿using BaronDesk.Shared.Models;
 
-namespace BaronDeskAgent.ServiceCore.Services;
+namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 public interface ITelemetryTransport
 {

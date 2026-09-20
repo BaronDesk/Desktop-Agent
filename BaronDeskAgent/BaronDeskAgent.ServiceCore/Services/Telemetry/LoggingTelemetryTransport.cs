@@ -1,7 +1,7 @@
 ﻿using System.Text.Json;
 using BaronDesk.Shared.Models;
 
-namespace BaronDeskAgent.ServiceCore.Services;
+namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 public sealed class LoggingTelemetryTransport : ITelemetryTransport
 {

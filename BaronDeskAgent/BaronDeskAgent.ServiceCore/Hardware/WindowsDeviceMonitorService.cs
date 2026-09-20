@@ -2,8 +2,7 @@
 using System.Threading.Channels;
 
 using BaronDesk.Shared.Models;
-
-using BaronDeskAgent.ServiceCore.Services;
+using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
