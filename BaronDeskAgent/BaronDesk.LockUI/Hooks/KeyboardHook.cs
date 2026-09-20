@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-
+using System.Windows.Input;
 namespace BaronDesk.LockUI.Hooks
 {
     public class KeyboardHook : IDisposable
