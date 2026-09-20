@@ -1,4 +1,5 @@
 ﻿using BaronDesk.Shared.Models;
+using BaronDeskAgent.ServiceCore.Services;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
@@ -25,10 +26,10 @@ public sealed class HardwareMonitorService : BackgroundService
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
-        _logger.LogInformation(
-            "Hardware monitoring service starting.");
-
         _sensorReader.Start();
+
+        _logger.LogInformation(
+            "Hardware monitoring started.");
 
         try
         {
@@ -36,28 +37,14 @@ public sealed class HardwareMonitorService : BackgroundService
                 new PeriodicTimer(SampleInterval);
 
             while (await timer.WaitForNextTickAsync(
-                stoppingToken))
+                       stoppingToken))
             {
-                try
-                {
-                    HardwareTelemetry telemetry =
-                        _sensorReader.ReadTelemetry();
+                HardwareTelemetry telemetry =
+                    _sensorReader.ReadTelemetry();
 
-                    await _telemetryService.PublishHardwareAsync(
-                        telemetry,
-                        stoppingToken);
-                }
-                catch (OperationCanceledException)
-                    when (stoppingToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        ex,
-                        "Error while collecting hardware telemetry.");
-                }
+                await _telemetryService.PublishHardwareAsync(
+                    telemetry,
+                    stoppingToken);
             }
         }
         catch (OperationCanceledException)
@@ -65,12 +52,18 @@ public sealed class HardwareMonitorService : BackgroundService
         {
             // Normal shutdown.
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Hardware monitoring stopped because of an unexpected error.");
+        }
         finally
         {
             _sensorReader.Stop();
 
             _logger.LogInformation(
-                "Hardware monitoring service stopped.");
+                "Hardware monitoring stopped.");
         }
     }
 }

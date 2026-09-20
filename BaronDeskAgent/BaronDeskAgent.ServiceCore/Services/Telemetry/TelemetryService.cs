@@ -1,153 +1,89 @@
-﻿using System.Threading.Channels;
-using BaronDesk.Shared.Models;
-using BaronDeskAgent.ServiceCore.Data.Entities;
-using BaronDeskAgent.ServiceCore.Data.Repositories;
-using System.Text.Json;
+﻿using BaronDesk.Shared.Models;
 
 namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
-public sealed class TelemetryService : BackgroundService
+public sealed class TelemetryService
 {
     private readonly ITelemetryTransport _transport;
-    private readonly OutboxRepository _outboxRepository;
     private readonly ILogger<TelemetryService> _logger;
-
-    private readonly Channel<TelemetryEnvelope> _channel;
-
-    private long _sequence;
 
     public TelemetryService(
         ITelemetryTransport transport,
-        OutboxRepository outboxRepository,
         ILogger<TelemetryService> logger)
     {
         _transport = transport;
-        _outboxRepository = outboxRepository;
         _logger = logger;
-
-        _channel = Channel.CreateBounded<TelemetryEnvelope>(
-            new BoundedChannelOptions(256)
-            {
-                SingleReader = true,
-                SingleWriter = false,
-
-                // Important for a lightweight agent.
-                // If the consumer temporarily falls behind,
-                // don't allow unlimited memory growth.
-                FullMode = BoundedChannelFullMode.DropOldest
-            });
     }
 
-    public ValueTask PublishHardwareAsync(
+    public async Task PublishHardwareAsync(
         HardwareTelemetry telemetry,
         CancellationToken cancellationToken = default)
     {
-        return PublishAsync(
-            "telemetry",
-            telemetry,
-            cancellationToken);
-    }
+        ArgumentNullException.ThrowIfNull(telemetry);
 
-    public ValueTask PublishDeviceAsync(
-        DeviceTelemetry telemetry,
-        CancellationToken cancellationToken = default)
-    {
-        return PublishAsync(
-            "device_event",
-            telemetry,
-            cancellationToken);
-    }
-
-    private async ValueTask PublishAsync<T>(
-        string type,
-        T payload,
-        CancellationToken cancellationToken)
-    {
         var envelope = new TelemetryEnvelope
         {
-            Type = type,
+            Type = "telemetry",
             Id = Guid.NewGuid(),
-            Timestamp = DateTimeOffset.UtcNow,
-            Sequence = Interlocked.Increment(ref _sequence),
-            Payload = payload!
+            Timestamp = DateTime.UtcNow,
+            Sequence = 0,
+            Payload = telemetry
         };
 
-        /*
-         * Important messages must be persisted before
-         * entering the in-memory channel.
-         *
-         * Normal telemetry remains live-only.
-         */
-        if (TelemetryMessagePolicy.RequiresOutbox(type))
-        {
-            var outboxMessage = new OutboxMessageEntity
-            {
-                Id = envelope.Id,
-                Type = envelope.Type,
-                Payload = JsonSerializer.Serialize(envelope),
-                CreatedAt = envelope.Timestamp,
-                Attempts = 0
-            };
-
-            await _outboxRepository.InsertAsync(
-                outboxMessage,
-                cancellationToken);
-
-            _logger.LogDebug(
-                "Important message stored in outbox. " +
-                "Type={Type}, Sequence={Sequence}, Id={Id}",
-                envelope.Type,
-                envelope.Sequence,
-                envelope.Id);
-        }
-
-        await _channel.Writer.WriteAsync(
+        await SendAsync(
             envelope,
             cancellationToken);
     }
 
-    protected override async Task ExecuteAsync(
-        CancellationToken stoppingToken)
+    public async Task PublishDeviceAsync(
+        DeviceTelemetry deviceTelemetry,
+        CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation(
-            "Telemetry service started.");
+        ArgumentNullException.ThrowIfNull(deviceTelemetry);
 
+        var envelope = new TelemetryEnvelope
+        {
+            Type = "device_event",
+            Id = Guid.NewGuid(),
+            Timestamp = DateTime.UtcNow,
+            Sequence = 0,
+            Payload = deviceTelemetry
+        };
+
+        await SendAsync(
+            envelope,
+            cancellationToken);
+    }
+
+    private async Task SendAsync(
+        TelemetryEnvelope envelope,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            await foreach (
-                var envelope in _channel.Reader.ReadAllAsync(
-                    stoppingToken))
-            {
-                try
-                {
-                    await _transport.SendAsync(
-                        envelope,
-                        stoppingToken);
-                }
-                catch (OperationCanceledException)
-                    when (stoppingToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        ex,
-                        "Failed to send telemetry. " +
-                        "Type={Type}, Sequence={Sequence}, Id={Id}",
-                        envelope.Type,
-                        envelope.Sequence,
-                        envelope.Id);
-                }
-            }
+            await _transport.SendAsync(
+                envelope,
+                cancellationToken);
+
+            _logger.LogInformation(
+                "Telemetry sent: Type={Type}, Sequence={Sequence}, Id={Id}",
+                envelope.Type,
+                envelope.Sequence,
+                envelope.Id);
         }
         catch (OperationCanceledException)
-            when (stoppingToken.IsCancellationRequested)
         {
-            // Normal shutdown.
+            throw;
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to send telemetry. Type={Type}, Id={Id}",
+                envelope.Type,
+                envelope.Id);
 
-        _logger.LogInformation(
-            "Telemetry service stopped.");
+            throw;
+        }
     }
 }

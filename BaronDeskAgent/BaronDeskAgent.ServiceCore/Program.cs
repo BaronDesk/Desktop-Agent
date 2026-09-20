@@ -1,15 +1,16 @@
 using BaronDeskAgent.ServiceCore;
+using BaronDeskAgent.ServiceCore.Commands;
+using BaronDeskAgent.ServiceCore.Commands.Handlers;
 using BaronDeskAgent.ServiceCore.Data.Database;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
 using BaronDeskAgent.ServiceCore.Hardware;
-using BaronDeskAgent.ServiceCore.Services.Outbox;
-using BaronDeskAgent.ServiceCore.Commands;
-using BaronDeskAgent.ServiceCore.Commands.Handlers;
-using BaronDeskAgent.ServiceCore.Services.Telemetry;
+using BaronDeskAgent.ServiceCore.Services;
 using BaronDeskAgent.ServiceCore.Services.Commands;
 using BaronDeskAgent.ServiceCore.Services.Games;
+using BaronDeskAgent.ServiceCore.Services.Outbox;
 using BaronDeskAgent.ServiceCore.Services.Session;
 using BaronDeskAgent.ServiceCore.Services.System;
+using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -37,18 +38,15 @@ builder.Services.AddSingleton<
     ITelemetryTransport,
     LoggingTelemetryTransport>();
 
-builder.Services.AddSingleton<TelemetryService>();
+builder.Services.AddSingleton<HardwareTelemetryMapper>();
 
-builder.Services.AddHostedService(
-    serviceProvider =>
-        serviceProvider.GetRequiredService<TelemetryService>());
+builder.Services.AddSingleton<TelemetryService>();
 
 // ---------------------------------------------------------
 // Outbox
 // ---------------------------------------------------------
 
 builder.Services.AddHostedService<OutboxWorker>();
-
 
 // ---------------------------------------------------------
 // Commands
