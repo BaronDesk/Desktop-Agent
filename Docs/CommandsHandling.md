@@ -9,7 +9,7 @@ The command flow is:
 ```text
 Backend
    │
-   │ CommandRequest
+   │ CommandRequest (via Envelope)
    ▼
 WebSocket Layer
    │
@@ -68,7 +68,7 @@ CommandService
       │       CommandResponse
 ```
 
-The handler lookup is based on the command type.
+The handler lookup is based on the command type (case-insensitive).
 
 ---
 
@@ -98,9 +98,12 @@ The `CommandType` property identifies which command the handler is responsible f
 For example:
 
 ```text
-"lock"        → LockCommandHandler
-"unlock"      → UnlockCommandHandler
-"end_session" → EndSessionCommandHandler
+"LOCK"          → LockCommandHandler
+"UNLOCK"        → UnlockCommandHandler
+"END_SESSION"   → EndSessionCommandHandler
+"LAUNCH_GAME"   → LaunchGameCommandHandler
+"SHUTDOWN"      → ShutdownCommandHandler
+"POLICY_UPDATE" → PolicyUpdateCommandHandler
 ```
 
 This avoids having one large command `switch` statement.
@@ -109,7 +112,7 @@ This avoids having one large command `switch` statement.
 
 ## 4. Current Command Handlers
 
-The current command handlers are:
+The current command handlers correspond to the 6 frozen wire commands:
 
 | Command | Handler | Service |
 |---|---|---|
@@ -117,9 +120,8 @@ The current command handlers are:
 | `UNLOCK` | `UnlockCommandHandler` | `LockService` |
 | `END_SESSION` | `EndSessionCommandHandler` | `SessionService` |
 | `LAUNCH_GAME` | `LaunchGameCommandHandler` | `GameService` |
-| `STOP_GAME` | `StopGameCommandHandler` | `GameService` |
 | `SHUTDOWN` | `ShutdownCommandHandler` | `SystemPowerService` |
-| `RESTART` | `RestartCommandHandler` | `SystemPowerService` |
+| `POLICY_UPDATE` | `PolicyUpdateCommandHandler` | Policy Store |
 
 The handlers are intentionally thin.
 
@@ -148,11 +150,10 @@ BaronDeskAgent.ServiceCore
 │       ├── ICommandHandler.cs
 │       ├── LockCommandHandler.cs
 │       ├── UnlockCommandHandler.cs
-│       ├── EndSessionCommandHandler.cs
+│       ├── EndSessionHandler.cs
 │       ├── LaunchGameCommandHandler.cs
-│       ├── StopGameCommandHandler.cs
 │       ├── ShutdownCommandHandler.cs
-│       └── RestartCommandHandler.cs
+│       └── PolicyUpdateCommandHandler.cs
 │
 └── Services
     │
@@ -210,9 +211,9 @@ LockAsync()
 UnlockAsync()
 ```
 
-The current implementation only manages the internal lock state.
+The current implementation manages the internal lock state.
 
-The LockUI and Named Pipe integration are handled separately and are not part of this command implementation.
+The LockUI and Named Pipe integration are handled separately via IPC.
 
 ---
 
@@ -253,7 +254,7 @@ SessionService.EndSessionAsync()
 
 The current implementation changes the local session state.
 
-Further session coordination can be added later when the complete session and lease behavior is implemented.
+Stopping active agent-launched games and enforcing station lockout are coordinated during `END_SESSION`.
 
 ---
 
@@ -274,7 +275,7 @@ LaunchGameAsync(string gameId)
 StopGameAsync(string gameId)
 ```
 
-The command flows are:
+The command flow is:
 
 ```text
 LAUNCH_GAME
@@ -286,23 +287,11 @@ LaunchGameCommandHandler
 GameService.LaunchGameAsync()
 ```
 
-and:
+At the current stage, `GameService` logs the request.
 
-```text
-STOP_GAME
-     │
-     ▼
-StopGameCommandHandler
-     │
-     ▼
-GameService.StopGameAsync()
-```
+The actual game catalog resolution and process launching will be added in upcoming feature iterations.
 
-At the current stage, these methods only log the request.
-
-The actual game process implementation will be added later.
-
-The handlers already validate that a game ID is provided.
+The handler validates that a game ID is provided in the request payload.
 
 ---
 
@@ -323,7 +312,7 @@ ShutdownAsync()
 RestartAsync()
 ```
 
-The command flows are:
+The command flow is:
 
 ```text
 SHUTDOWN
@@ -335,27 +324,33 @@ ShutdownCommandHandler
 SystemPowerService.ShutdownAsync()
 ```
 
-and:
+At the current stage, this method logs the request.
 
-```text
-RESTART
-    │
-    ▼
-RestartCommandHandler
-    │
-    ▼
-SystemPowerService.RestartAsync()
-```
-
-At the current stage, these methods only log the request.
-
-Actual Windows shutdown/restart behavior will be implemented later.
-
-This allows the command routing to be tested without accidentally shutting down or restarting the development machine.
+Actual Windows shutdown/restart behavior will be executed via Win32 process execution in upcoming system feature work.
 
 ---
 
-## 10. Dependency Injection
+## 10. Policy Update Commands
+
+Policy update functionality handles remote configuration changes from the server:
+
+The command flow is:
+
+```text
+POLICY_UPDATE
+      │
+      ▼
+PolicyUpdateCommandHandler
+      │
+      ▼
+Policy Store (SQLite persistence)
+```
+
+`PolicyUpdateCommandHandler` handles `CommandTypes.PolicyUpdate`, validating the incoming configuration and returning an acknowledgement.
+
+---
+
+## 11. Dependency Injection
 
 The command handlers are registered through dependency injection:
 
@@ -364,9 +359,8 @@ builder.Services.AddSingleton<ICommandHandler, LockCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, UnlockCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, EndSessionCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, LaunchGameCommandHandler>();
-builder.Services.AddSingleton<ICommandHandler, StopGameCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, ShutdownCommandHandler>();
-builder.Services.AddSingleton<ICommandHandler, RestartCommandHandler>();
+builder.Services.AddSingleton<ICommandHandler, PolicyUpdateCommandHandler>();
 
 builder.Services.AddSingleton<CommandService>();
 ```
@@ -386,9 +380,9 @@ builder.Services.AddSingleton<SystemPowerService>();
 IEnumerable<ICommandHandler>
 ```
 
-and builds the command lookup dictionary automatically.
+and builds the command lookup dictionary automatically using case-insensitive ordinal matching.
 
-Adding another command therefore follows the same pattern:
+Adding another command follows the same pattern:
 
 ```text
 New Command Type
@@ -402,14 +396,15 @@ New Command Type
 
 ---
 
-## 11. Shared Command Contracts
+## 12. Shared Command Contracts
 
 Command contracts are located in:
 
 ```text
 BaronDesk.Shared
 └── Contracts
-    ├── AgentMessage.cs
+    ├── Envelope.cs
+    ├── AgentJsonContext.cs
     ├── MessageTypes.cs
     ├── CommandTypes.cs
     ├── CommandRequest.cs
@@ -419,9 +414,21 @@ BaronDesk.Shared
 
 The ServiceCore uses the existing shared contracts.
 
-Command types should remain centralized in the Shared project rather than being duplicated inside ServiceCore.
+Command types remain centralized in the Shared project:
 
-The command system therefore works with:
+```csharp
+public static class CommandTypes
+{
+    public const string Lock = "LOCK";
+    public const string Unlock = "UNLOCK";
+    public const string Shutdown = "SHUTDOWN";
+    public const string LaunchGame = "LAUNCH_GAME";
+    public const string EndSession = "END_SESSION";
+    public const string PolicyUpdate = "POLICY_UPDATE";
+}
+```
+
+The command system works with:
 
 ```csharp
 CommandRequest
@@ -433,7 +440,7 @@ from `BaronDesk.Shared.Contracts`.
 
 ---
 
-## 12. Command Request
+## 13. Command Request
 
 A command request conceptually contains:
 
@@ -447,33 +454,38 @@ For example:
 
 ```json
 {
-  "id": "command-guid",
-  "type": "lock",
+  "id": "c7a8b2d1-0f4b-4f91-8e56-2e8c1a2b3c4d",
+  "type": "LOCK",
   "payload": null
 }
 ```
 
-A game command can contain a game identifier:
+A game command contains a game identifier:
 
 ```json
 {
-  "id": "command-guid",
-  "type": "launch_game",
+  "id": "c7a8b2d1-0f4b-4f91-8e56-2e8c1a2b3c4d",
+  "type": "LAUNCH_GAME",
   "payload": "game-id"
 }
 ```
 
-The exact payload format must follow the existing Shared/backend contract.
+A policy update contains the policy dictionary or payload:
 
-For structured payloads, a typed payload model should eventually be preferred over relying on:
-
-```csharp
-command.Payload?.ToString()
+```json
+{
+  "id": "c7a8b2d1-0f4b-4f91-8e56-2e8c1a2b3c4d",
+  "type": "POLICY_UPDATE",
+  "payload": {
+    "heartbeatIntervalSeconds": 15,
+    "telemetryCadenceSeconds": 5
+  }
+}
 ```
 
 ---
 
-## 13. Command Response
+## 14. Command Response
 
 Handlers return a `CommandResponse`.
 
@@ -481,9 +493,10 @@ Successful command:
 
 ```json
 {
-  "commandId": "command-guid",
+  "commandId": "c7a8b2d1-0f4b-4f91-8e56-2e8c1a2b3c4d",
   "success": true,
-  "error": null
+  "error": null,
+  "respondedAt": "2026-09-20T11:22:33.456Z"
 }
 ```
 
@@ -491,17 +504,18 @@ Failed command:
 
 ```json
 {
-  "commandId": "command-guid",
+  "commandId": "c7a8b2d1-0f4b-4f91-8e56-2e8c1a2b3c4d",
   "success": false,
-  "error": "Game ID is required."
+  "error": "Game ID is required.",
+  "respondedAt": "2026-09-20T11:22:33.456Z"
 }
 ```
 
-The response contains the original command ID so that the backend can correlate the result with the request.
+The response contains the original command ID and timestamp (`DateTimeOffset`) so that the backend can correlate the result with the request.
 
 ---
 
-## 14. WebSocket Integration
+## 15. WebSocket Integration
 
 The command system is intentionally independent from the WebSocket implementation.
 
@@ -510,14 +524,11 @@ The eventual flow is:
 ```text
 Backend
    │
-   │ WSS
+   │ WSS (Envelope)
    ▼
 WebSocket Layer
    │
-   │ Deserialize
-   ▼
-CommandRequest
-   │
+   │ Extract CommandRequest
    ▼
 CommandService
    │
@@ -531,26 +542,24 @@ Local Service
 CommandResponse
    │
    ▼
-WebSocket Layer
+WebSocket Layer (Envelope with command_ack / command_nack)
    │
    │ WSS
    ▼
 Backend
 ```
 
-The WebSocket layer is responsible for communication.
+The WebSocket layer is responsible for transport and envelope unwrapping.
 
 The command system is responsible for routing and executing commands.
 
-This separation also allows the command system to be tested without a live backend connection.
-
 ---
 
-## 15. Testing the Command System
+## 16. Testing the Command System
 
-The command system can currently be tested locally through the existing `Worker`.
+The command system can be tested locally by calling `CommandService.HandleAsync`.
 
-A test command can be created:
+A command request is created:
 
 ```csharp
 var command = new CommandRequest
@@ -560,19 +569,19 @@ var command = new CommandRequest
 };
 ```
 
-and executed with:
+and executed:
 
 ```csharp
 var response =
     await _commandService.HandleAsync(
         command,
-        stoppingToken);
+        cancellationToken);
 ```
 
 The resulting flow is:
 
 ```text
-Worker
+Caller (ConnectionWorker / Test)
    │
    ▼
 CommandService
@@ -587,50 +596,45 @@ Local Service
 CommandResponse
 ```
 
-Safe commands for testing currently include:
+The 6 commands:
 
 ```text
 LOCK
 UNLOCK
 END_SESSION
 LAUNCH_GAME
-STOP_GAME
+SHUTDOWN
+POLICY_UPDATE
 ```
 
-`SHUTDOWN` and `RESTART` currently only log their requests, so their routing can also be tested without performing the actual system operation.
+can all be executed and routed through `CommandService`.
 
 ---
 
-## 16. Command Idempotency
+## 17. Command Idempotency
 
-Commands may eventually be delivered more than once because of network retries.
+Commands may be delivered more than once because of network retries.
 
-The command system therefore needs to account for idempotency.
-
-For example:
+The command system accounts for idempotency:
 
 ```text
 LOCK + LOCK
-    → should remain locked
+    → remains locked
 
 UNLOCK + UNLOCK
-    → should remain unlocked
+    → remains unlocked
 
 END_SESSION + END_SESSION
-    → should safely handle the second request
+    → safely terminates any active session
 ```
 
-`LockService` already handles repeated lock/unlock calls safely.
-
-A command ID can also be used later for duplicate command detection when required.
+`LockService` handles repeated lock/unlock calls safely.
 
 ---
 
-## 17. Authorization and Lease
+## 18. Authorization and Lease
 
-The agent should not make its own authorization decisions.
-
-The intended responsibility is:
+The agent does not make independent authorization decisions:
 
 ```text
 Backend
@@ -647,38 +651,9 @@ Agent
 Local machine
 ```
 
-The backend remains responsible for authorization and lease decisions.
+The backend remains authoritative for session timing, lease renewals, and permissions.
 
-The agent can still perform local validation, such as:
-
-```text
-Missing game ID
-Invalid command payload
-Invalid local state
-No tracked game to stop
-```
-
-but it should not replace the backend's authorization logic.
-
----
-
-## 18. Future Command Work
-
-The current command architecture provides the base.
-
-Remaining work includes:
-
-1. Connect `CommandService` to the real WebSocket command receiver.
-2. Send command responses/acknowledgements back to the backend.
-3. Integrate the LockUI/Named Pipe implementation.
-4. Implement the real game launching mechanism.
-5. Track the launched game process.
-6. Implement controlled game stopping.
-7. Implement Windows shutdown/restart.
-8. Integrate session lifecycle with lease management.
-9. Add command idempotency where required.
-10. Add final authorization/state validation.
-11. Add end-to-end command tests.
+The agent validates local parameters (such as required game IDs and current local states) while executing authorized commands.
 
 ---
 
@@ -687,14 +662,14 @@ Remaining work includes:
 ```text
                          BACKEND
                             │
-                            │ WSS
+                            │ WSS (Envelope)
                             ▼
                     ┌───────────────┐
                     │ WebSocket     │
                     │ Layer         │
                     └───────┬───────┘
                             │
-                     CommandRequest
+                      CommandRequest
                             │
                             ▼
                     ┌───────────────┐
@@ -702,36 +677,23 @@ Remaining work includes:
                     │    Router     │
                     └───────┬───────┘
                             │
-          ┌─────────────────┼──────────────────┐
-          │                 │                  │
-          ▼                 ▼                  ▼
-    Lock Handlers     Session Handler     Game Handlers
-          │                 │             ┌────┴────┐
-          ▼                 ▼             ▼         ▼
-     LockService      SessionService   Launch     Stop
-                                           │         │
-                                           └────┬────┘
-                                                ▼
-                                           GameService
-
-                            │
-                            ▼
-                    System Power Handlers
-                            │
-                            ▼
-                    SystemPowerService
-                       │            │
-                       ▼            ▼
-                    Shutdown      Restart
-
-                            │
-                            ▼
-                     CommandResponse
-                            │
-                            ▼
-                      WebSocket Layer
-                            │
-                            ▼
+       ┌──────────────┬─────┴────────┬──────────────┬──────────────┐
+       ▼              ▼              ▼              ▼              ▼
+  Lock Handlers Session Handler Game Handler  Shutdown Handler Policy Handler
+       │              │              │              │              │
+       ▼              ▼              ▼              ▼              ▼
+  LockService   SessionService  GameService  SystemPowerService  PolicyStore
+       │              │              │              │              │
+       └──────────────┴──────┬───────┴──────────────┴──────────────┘
+                             │
+                             ▼
+                      CommandResponse
+                             │
+                             ▼
+                      WebSocket Layer (Envelope)
+                             │
+                             │ WSS (command_ack / command_nack)
+                             ▼
                           BACKEND
 ```
 
