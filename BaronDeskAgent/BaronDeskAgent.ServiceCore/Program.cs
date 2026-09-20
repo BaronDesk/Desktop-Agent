@@ -1,8 +1,11 @@
 using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Commands.Handlers;
+using BaronDeskAgent.ServiceCore.Communication;
+using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Data.Database;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
 using BaronDeskAgent.ServiceCore.Hardware;
+using BaronDeskAgent.ServiceCore.Security;
 using BaronDeskAgent.ServiceCore.Services;
 using BaronDeskAgent.ServiceCore.Services.Commands;
 using BaronDeskAgent.ServiceCore.Services.Games;
@@ -12,6 +15,13 @@ using BaronDeskAgent.ServiceCore.Services.System;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 var builder = Host.CreateApplicationBuilder(args);
+
+// ---------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------
+
+builder.Services.Configure<AgentOptions>(
+    builder.Configuration.GetSection(AgentOptions.SectionName));
 
 // ---------------------------------------------------------
 // Database
@@ -24,6 +34,16 @@ builder.Services.AddSingleton<DatabaseInitializer>();
 builder.Services.AddSingleton<OutboxRepository>();
 
 // ---------------------------------------------------------
+// Security & Connection
+// ---------------------------------------------------------
+
+builder.Services.AddSingleton<ReplayGuard>();
+
+builder.Services.AddSingleton<IdempotencyTracker>();
+
+builder.Services.AddSingleton<IServerConnection, WebSocketConnection>();
+
+// ---------------------------------------------------------
 // Hardware
 // ---------------------------------------------------------
 
@@ -33,9 +53,7 @@ builder.Services.AddSingleton<HardwareSensorReader>();
 // Telemetry
 // ---------------------------------------------------------
 
-builder.Services.AddSingleton<
-    ITelemetryTransport,
-    LoggingTelemetryTransport>();
+builder.Services.AddSingleton<ITelemetryTransport, WebSocketTelemetryTransport>();
 
 builder.Services.AddSingleton<HardwareTelemetryMapper>();
 
@@ -70,14 +88,14 @@ builder.Services.AddSingleton<GameService>();
 builder.Services.AddSingleton<SystemPowerService>();
 
 // ---------------------------------------------------------
-// Monitoring
+// Monitoring & Communication Workers
 // ---------------------------------------------------------
 
 builder.Services.AddHostedService<HardwareMonitorService>();
 
 builder.Services.AddHostedService<WindowsDeviceMonitorService>();
 
-
+builder.Services.AddHostedService<ConnectionWorker>();
 
 // ---------------------------------------------------------
 // Build

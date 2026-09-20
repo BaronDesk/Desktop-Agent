@@ -332,6 +332,6 @@ Serialized JSON format:
 - [x] Unified `Envelope` deserialization and sending
 - [x] Successful message deletion
 - [x] Attempt counter increments on retry
-- [ ] Real WebSocket transport integration
-- [ ] Network failure / exponential backoff with jitter
+- [x] Real WebSocket transport integration (`WebSocketTelemetryTransport`)
+- [x] Network failure / exponential backoff with jitter (`ConnectionWorker`)
 - [ ] Bounded outbox storage policy (drop oldest telemetry on overflow, keep alerts)

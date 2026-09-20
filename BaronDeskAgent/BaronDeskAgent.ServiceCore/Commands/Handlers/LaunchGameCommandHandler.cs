@@ -1,4 +1,4 @@
-﻿using BaronDesk.Shared.Contracts;
+using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Services.Games;
 
 namespace BaronDeskAgent.ServiceCore.Commands.Handlers;
@@ -27,8 +27,24 @@ public sealed class LaunchGameCommandHandler : ICommandHandler
             "Handling LAUNCH_GAME command. CommandId={CommandId}",
             command.Id);
 
-        var gameId =
-            command.Payload?.ToString();
+        string? gameId = null;
+
+        if (command.Payload is System.Text.Json.JsonElement je)
+        {
+            if (je.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                gameId = je.GetString();
+            }
+            else if (je.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                     (je.TryGetProperty("gameId", out var prop) || je.TryGetProperty("GameId", out prop)))
+            {
+                gameId = prop.GetString();
+            }
+        }
+        else
+        {
+            gameId = command.Payload?.ToString();
+        }
 
         if (string.IsNullOrWhiteSpace(gameId))
         {
