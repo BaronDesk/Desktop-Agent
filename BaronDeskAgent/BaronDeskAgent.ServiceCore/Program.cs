@@ -1,4 +1,3 @@
-using BaronDeskAgent.ServiceCore;
 using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Commands.Handlers;
 using BaronDeskAgent.ServiceCore.Data.Database;
@@ -56,9 +55,8 @@ builder.Services.AddSingleton<ICommandHandler, LockCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, UnlockCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, EndSessionCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, LaunchGameCommandHandler>();
-builder.Services.AddSingleton<ICommandHandler, StopGameCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, ShutdownCommandHandler>();
-builder.Services.AddSingleton<ICommandHandler, RestartCommandHandler>();
+builder.Services.AddSingleton<ICommandHandler, PolicyUpdateCommandHandler>();
 
 builder.Services.AddSingleton<CommandService>();
 
@@ -79,11 +77,7 @@ builder.Services.AddHostedService<HardwareMonitorService>();
 
 builder.Services.AddHostedService<WindowsDeviceMonitorService>();
 
-// ---------------------------------------------------------
-// Existing Worker
-// ---------------------------------------------------------
 
-builder.Services.AddHostedService<Worker>();
 
 // ---------------------------------------------------------
 // Build

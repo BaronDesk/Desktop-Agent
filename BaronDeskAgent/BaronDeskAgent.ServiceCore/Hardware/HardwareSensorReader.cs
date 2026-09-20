@@ -1,4 +1,4 @@
-﻿using BaronDesk.Shared.Models;
+using BaronDesk.Shared.Models;
 using LibreHardwareMonitor.Hardware;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
@@ -33,7 +33,7 @@ public class HardwareSensorReader
     {
         var telemetry = new HardwareTelemetry
         {
-            Timestamp = DateTime.UtcNow
+            Timestamp = DateTimeOffset.UtcNow
         };
 
         var visitor = new UpdateVisitor();

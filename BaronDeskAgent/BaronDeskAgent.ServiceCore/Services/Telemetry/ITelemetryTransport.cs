@@ -1,10 +1,10 @@
-﻿using BaronDesk.Shared.Models;
+using BaronDesk.Shared.Contracts;
 
 namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 public interface ITelemetryTransport
 {
     Task SendAsync(
-        TelemetryEnvelope envelope,
+        Envelope envelope,
         CancellationToken cancellationToken);
-}
+}

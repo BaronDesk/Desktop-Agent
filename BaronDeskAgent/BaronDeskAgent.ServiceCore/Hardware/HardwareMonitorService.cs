@@ -1,5 +1,4 @@
-﻿using BaronDesk.Shared.Models;
-using BaronDeskAgent.ServiceCore.Services;
+using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
@@ -7,6 +6,7 @@ namespace BaronDeskAgent.ServiceCore.Hardware;
 public sealed class HardwareMonitorService : BackgroundService
 {
     private readonly HardwareSensorReader _sensorReader;
+    private readonly HardwareTelemetryMapper _telemetryMapper;
     private readonly TelemetryService _telemetryService;
     private readonly ILogger<HardwareMonitorService> _logger;
 
@@ -15,10 +15,12 @@ public sealed class HardwareMonitorService : BackgroundService
 
     public HardwareMonitorService(
         HardwareSensorReader sensorReader,
+        HardwareTelemetryMapper telemetryMapper,
         TelemetryService telemetryService,
         ILogger<HardwareMonitorService> logger)
     {
         _sensorReader = sensorReader;
+        _telemetryMapper = telemetryMapper;
         _telemetryService = telemetryService;
         _logger = logger;
     }
@@ -42,8 +44,17 @@ public sealed class HardwareMonitorService : BackgroundService
                 HardwareTelemetry telemetry =
                     _sensorReader.ReadTelemetry();
 
+                var metrics =
+                    _telemetryMapper.Map(telemetry);
+
+                var payload = new HardwareTelemetryPayload
+                {
+                    Timestamp = telemetry.Timestamp,
+                    Metrics = metrics
+                };
+
                 await _telemetryService.PublishHardwareAsync(
-                    telemetry,
+                    payload,
                     stoppingToken);
             }
         }
@@ -66,4 +77,4 @@ public sealed class HardwareMonitorService : BackgroundService
                 "Hardware monitoring stopped.");
         }
     }
-}
+}

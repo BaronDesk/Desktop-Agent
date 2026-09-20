@@ -1,5 +1,5 @@
-﻿using System.Text.Json;
-using BaronDesk.Shared.Models;
+using System.Text.Json;
+using BaronDesk.Shared.Contracts;
 
 namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
@@ -20,7 +20,7 @@ public sealed class LoggingTelemetryTransport : ITelemetryTransport
     }
 
     public Task SendAsync(
-        TelemetryEnvelope envelope,
+        Envelope envelope,
         CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(
@@ -30,10 +30,10 @@ public sealed class LoggingTelemetryTransport : ITelemetryTransport
         _logger.LogInformation(
             "Telemetry sent: Type={Type}, Sequence={Sequence}, Id={Id}, Payload={Payload}",
             envelope.Type,
-            envelope.Sequence,
+            envelope.Seq,
             envelope.Id,
             json);
 
         return Task.CompletedTask;
     }
-}
+}
