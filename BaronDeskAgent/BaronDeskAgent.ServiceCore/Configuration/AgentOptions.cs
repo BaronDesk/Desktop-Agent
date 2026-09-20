@@ -54,4 +54,19 @@ public sealed class AgentOptions
     /// Maximum allowable clock drift between agent and server in seconds for anti-replay check.
     /// </summary>
     public double MaxTimestampDriftSeconds { get; set; } = 60.0;
+
+    /// <summary>
+    /// Cadence in seconds at which the agent sends presence heartbeats to the server.
+    /// </summary>
+    public double HeartbeatIntervalSeconds { get; set; } = 15.0;
+
+    /// <summary>
+    /// Default lease duration in seconds granted on unlock or heartbeat ack.
+    /// </summary>
+    public double DefaultLeaseDurationSeconds { get; set; } = 60.0;
+
+    /// <summary>
+    /// Grace window in seconds after lease expiration before enforcing fail-closed station lockout.
+    /// </summary>
+    public double LeaseGracePeriodSeconds { get; set; } = 10.0;
 }

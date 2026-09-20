@@ -79,11 +79,14 @@ builder.Services.AddSingleton<ICommandHandler, PolicyUpdateCommandHandler>();
 builder.Services.AddSingleton<CommandService>();
 
 // ---------------------------------------------------------
-// Command Services
+// Command Services, Session & Lease Management
 // ---------------------------------------------------------
+
+builder.Services.AddSingleton(TimeProvider.System);
 
 builder.Services.AddSingleton<LockService>();
 builder.Services.AddSingleton<SessionService>();
+builder.Services.AddSingleton<LeaseManager>();
 builder.Services.AddSingleton<GameService>();
 builder.Services.AddSingleton<SystemPowerService>();
 
@@ -96,6 +99,8 @@ builder.Services.AddHostedService<HardwareMonitorService>();
 builder.Services.AddHostedService<WindowsDeviceMonitorService>();
 
 builder.Services.AddHostedService<ConnectionWorker>();
+
+builder.Services.AddHostedService<HeartbeatWorker>();
 
 // ---------------------------------------------------------
 // Build
