@@ -4,6 +4,8 @@ using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Security;
+using BaronDeskAgent.ServiceCore.Services.Commands;
+using BaronDeskAgent.ServiceCore.Services.Session;
 using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Communication;
@@ -25,6 +27,9 @@ public sealed class ConnectionWorker : BackgroundService
     private readonly CommandService _commandService;
     private readonly ReplayGuard _replayGuard;
     private readonly IdempotencyTracker _idempotencyTracker;
+    private readonly LockService _lockService;
+    private readonly SessionService _sessionService;
+    private readonly LeaseManager _leaseManager;
     private readonly IOptions<AgentOptions> _options;
     private readonly ILogger<ConnectionWorker> _logger;
 
@@ -33,6 +38,9 @@ public sealed class ConnectionWorker : BackgroundService
         CommandService commandService,
         ReplayGuard replayGuard,
         IdempotencyTracker idempotencyTracker,
+        LockService lockService,
+        SessionService sessionService,
+        LeaseManager leaseManager,
         IOptions<AgentOptions> options,
         ILogger<ConnectionWorker> logger)
     {
@@ -40,6 +48,9 @@ public sealed class ConnectionWorker : BackgroundService
         _commandService = commandService;
         _replayGuard = replayGuard;
         _idempotencyTracker = idempotencyTracker;
+        _lockService = lockService;
+        _sessionService = sessionService;
+        _leaseManager = leaseManager;
         _options = options;
         _logger = logger;
     }
@@ -127,6 +138,33 @@ public sealed class ConnectionWorker : BackgroundService
             serial, Environment.MachineName);
     }
 
+    private async Task SendStateReportAsync(CancellationToken cancellationToken)
+    {
+        var stateReport = new StateReportPayload
+        {
+            Locked = _lockService.IsLocked,
+            SessionId = _sessionService.CurrentSessionId,
+            RunningGameId = null,
+            LeaseExpiresAt = _leaseManager.LeaseExpiresAt
+        };
+
+        var envelope = new Envelope<StateReportPayload>
+        {
+            Type = MessageTypes.StateReport,
+            Id = Guid.NewGuid(),
+            Ts = DateTimeOffset.UtcNow,
+            Seq = _connection.NextSequence(),
+            Payload = stateReport
+        };
+
+        await _connection.SendAsync(envelope, cancellationToken);
+        _logger.LogInformation(
+            "State report sent on connect. Locked={Locked}, SessionId={SessionId}, LeaseExpiresAt={ExpiresAt:u}",
+            stateReport.Locked,
+            stateReport.SessionId,
+            stateReport.LeaseExpiresAt);
+    }
+
     private async Task RunReceiveLoopAsync(CancellationToken stoppingToken)
     {
         while (_connection.IsConnected && !stoppingToken.IsCancellationRequested)
@@ -153,12 +191,25 @@ public sealed class ConnectionWorker : BackgroundService
         if (envelope.Type.Equals(MessageTypes.HandshakeAck, StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogInformation("Handshake acknowledged by server.");
+            await SendStateReportAsync(cancellationToken);
             return;
         }
 
         if (envelope.Type.Equals(MessageTypes.HeartbeatAck, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogDebug("Heartbeat acknowledged by server.");
+            DateTimeOffset? leaseExpiresAt = null;
+
+            if (envelope.Payload.ValueKind == JsonValueKind.Object &&
+                (envelope.Payload.TryGetProperty("leaseExpiresAt", out var prop) ||
+                 envelope.Payload.TryGetProperty("LeaseExpiresAt", out prop)) &&
+                prop.ValueKind == JsonValueKind.String &&
+                DateTimeOffset.TryParse(prop.GetString(), out var parsed))
+            {
+                leaseExpiresAt = parsed;
+            }
+
+            _leaseManager.UpdateLease(leaseExpiresAt);
+            _logger.LogDebug("Heartbeat acknowledged by server. Lease updated: {ExpiresAt:u}", leaseExpiresAt);
             return;
         }
 

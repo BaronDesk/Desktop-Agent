@@ -1,4 +1,4 @@
-﻿namespace BaronDeskAgent.ServiceCore.Services.Commands;
+namespace BaronDeskAgent.ServiceCore.Services.Commands;
 
 public sealed class LockService
 {
@@ -10,6 +10,8 @@ public sealed class LockService
         ILogger<LockService> logger)
     {
         _logger = logger;
+        // Default to locked state on startup (fail-closed)
+        _isLocked = 1;
     }
 
     public bool IsLocked =>
