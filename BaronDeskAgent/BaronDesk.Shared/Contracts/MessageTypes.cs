@@ -1,21 +1,21 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace BaronDesk.Shared.Contracts;
 
-namespace BaronDesk.Shared.Contracts
+public static class MessageTypes
 {
-    // Categories of message exchanged on the SOCKET channel
-    // (Service Core <-> Real-time Hub)
-    public enum MessageType
-    {
-        Register,
-        Heartbeat,
-        Telemetry,
-        Command,
-        Ack,
-        Nack,
-        Alert,
-        ConnectionAccepted,
-        ConnectionRejected
-    }
+    // Agent -> Server
+    public const string Handshake = "handshake";
+    public const string Heartbeat = "heartbeat";
+    public const string Telemetry = "telemetry";
+    public const string Alert = "alert";
+    public const string CommandAck = "command_ack";
+    public const string CommandNack = "command_nack";
+    public const string StateReport = "state_report";
+
+    // Server -> Agent
+    public const string HandshakeAck = "handshake_ack";
+    public const string HeartbeatAck = "heartbeat_ack";
+    public const string Command = "command";
+    public const string StateRequest = "state_request";
+    public const string PolicyPush = "policy_push";
 }
+

@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
@@ -146,7 +146,8 @@ public static class WindowsDeviceEnumerator
                         deviceInfoSet,
                         ref deviceInfo);
 
-                if (!string.Equals(
+                if (currentInstanceId is null ||
+                    !string.Equals(
                         currentInstanceId,
                         instanceId,
                         StringComparison.OrdinalIgnoreCase))

@@ -1,4 +1,4 @@
-﻿using BaronDesk.Shared.Models;
+using BaronDesk.Shared.Models;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
@@ -215,7 +215,7 @@ public sealed class HardwareTelemetryMapper
     private static NodeTelemetryMetric CreateMetric(
         string metric,
         double value,
-        DateTime sampledAt)
+        DateTimeOffset sampledAt)
     {
         return new NodeTelemetryMetric
         {

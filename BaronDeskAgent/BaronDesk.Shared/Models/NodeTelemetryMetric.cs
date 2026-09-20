@@ -1,4 +1,4 @@
-﻿namespace BaronDesk.Shared.Models;
+namespace BaronDesk.Shared.Models;
 
 public sealed class NodeTelemetryMetric
 {
@@ -6,5 +6,5 @@ public sealed class NodeTelemetryMetric
 
     public required double Value { get; init; }
 
-    public required DateTime SampledAt { get; init; }
+    public required DateTimeOffset SampledAt { get; init; }
 }

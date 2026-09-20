@@ -1,4 +1,5 @@
-﻿using BaronDesk.Shared.Models;
+using BaronDesk.Shared.Contracts;
+using BaronDesk.Shared.Models;
 
 namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
@@ -6,6 +7,7 @@ public sealed class TelemetryService
 {
     private readonly ITelemetryTransport _transport;
     private readonly ILogger<TelemetryService> _logger;
+    private long _sequence;
 
     public TelemetryService(
         ITelemetryTransport transport,
@@ -16,18 +18,18 @@ public sealed class TelemetryService
     }
 
     public async Task PublishHardwareAsync(
-        HardwareTelemetry telemetry,
+        HardwareTelemetryPayload telemetryPayload,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(telemetry);
+        ArgumentNullException.ThrowIfNull(telemetryPayload);
 
-        var envelope = new TelemetryEnvelope
+        var envelope = new Envelope
         {
-            Type = "telemetry",
+            Type = MessageTypes.Telemetry,
             Id = Guid.NewGuid(),
-            Timestamp = DateTime.UtcNow,
-            Sequence = 0,
-            Payload = telemetry
+            Ts = DateTimeOffset.UtcNow,
+            Seq = Interlocked.Increment(ref _sequence),
+            Payload = telemetryPayload
         };
 
         await SendAsync(
@@ -41,12 +43,12 @@ public sealed class TelemetryService
     {
         ArgumentNullException.ThrowIfNull(deviceTelemetry);
 
-        var envelope = new TelemetryEnvelope
+        var envelope = new Envelope
         {
             Type = "device_event",
             Id = Guid.NewGuid(),
-            Timestamp = DateTime.UtcNow,
-            Sequence = 0,
+            Ts = DateTimeOffset.UtcNow,
+            Seq = Interlocked.Increment(ref _sequence),
             Payload = deviceTelemetry
         };
 
@@ -56,7 +58,7 @@ public sealed class TelemetryService
     }
 
     private async Task SendAsync(
-        TelemetryEnvelope envelope,
+        Envelope envelope,
         CancellationToken cancellationToken)
     {
         try
@@ -68,7 +70,7 @@ public sealed class TelemetryService
             _logger.LogInformation(
                 "Telemetry sent: Type={Type}, Sequence={Sequence}, Id={Id}",
                 envelope.Type,
-                envelope.Sequence,
+                envelope.Seq,
                 envelope.Id);
         }
         catch (OperationCanceledException)
@@ -86,4 +88,4 @@ public sealed class TelemetryService
             throw;
         }
     }
-}
+}

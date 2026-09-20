@@ -1,8 +1,8 @@
-﻿namespace BaronDesk.Shared.Models;
+namespace BaronDesk.Shared.Models;
 
 public class DeviceTelemetry
 {
-    public DateTime Timestamp { get; set; }
+    public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
 
     public string DeviceType { get; set; } = string.Empty;
 
