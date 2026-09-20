@@ -1,11 +1,14 @@
 using System.Runtime.InteropServices;
-using System.Windows.Input;
+
 namespace BaronDesk.LockUI.Hooks
 {
     public class KeyboardHook : IDisposable
     {
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
+        private const int WM_KEYUP = 0x0101;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_SYSKEYUP = 0x0105;
         private const int VK_TAB = 0x09;
         private const int VK_ESCAPE = 0x1B;
         private const int VK_LWIN = 0x5B;
@@ -16,7 +19,7 @@ namespace BaronDesk.LockUI.Hooks
 
         public KeyboardHook()
         {
-            _proc = HookCallback; // kept as a field so the GC doesn't collect it mid-hook
+            _proc = HookCallback;
         }
 
         public void Install()
@@ -29,15 +32,20 @@ namespace BaronDesk.LockUI.Hooks
 
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            if (nCode >= 0 && wParam == WM_KEYDOWN)
+            if (nCode >= 0)
             {
                 int vkCode = Marshal.ReadInt32(lParam);
-                bool block =
-                    vkCode == VK_LWIN || vkCode == VK_RWIN ||
-                    (vkCode == VK_TAB && (GetAsyncKeyState(0x12) & 0x8000) != 0) ||
-                    (vkCode == VK_ESCAPE && (GetAsyncKeyState(0x12) & 0x8000) != 0);
+                bool isWinKey = vkCode == VK_LWIN || vkCode == VK_RWIN;
+                bool isKeyEvent = wParam == WM_KEYDOWN || wParam == WM_KEYUP
+                                || wParam == WM_SYSKEYDOWN || wParam == WM_SYSKEYUP;
 
-                if (block) return (IntPtr)1; // swallow the key press
+                bool blockAltCombo =
+                    (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
+                    (vkCode == VK_TAB || vkCode == VK_ESCAPE) &&
+                    (GetAsyncKeyState(0x12) & 0x8000) != 0;
+
+                if ((isWinKey && isKeyEvent) || blockAltCombo)
+                    return (IntPtr)1; // swallow it, both down AND up
             }
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
         }

@@ -35,7 +35,7 @@ namespace BaronDesk.LockUI
         {
             Show();
             Activate();
-            //_keyboardHook.Install();
+            _keyboardHook.Install();
 
             _ = Task.Run(async () =>
             {
