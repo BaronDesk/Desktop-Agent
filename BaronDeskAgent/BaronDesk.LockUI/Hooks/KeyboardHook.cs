@@ -13,6 +13,9 @@ namespace BaronDesk.LockUI.Hooks
         private const int VK_ESCAPE = 0x1B;
         private const int VK_LWIN = 0x5B;
         private const int VK_RWIN = 0x5C;
+        private const int VK_CONTROL = 0x11;
+        private const int VK_MENU = 0x12; // Alt
+        private const int VK_F4 = 0x73;
 
         private IntPtr _hookId = IntPtr.Zero;
         private readonly LowLevelKeyboardProc _proc;
@@ -24,6 +27,7 @@ namespace BaronDesk.LockUI.Hooks
 
         public void Install()
         {
+            if (_hookId != IntPtr.Zero) return;
             using var curProcess = System.Diagnostics.Process.GetCurrentProcess();
             using var curModule = curProcess.MainModule!;
             _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _proc,
@@ -39,12 +43,20 @@ namespace BaronDesk.LockUI.Hooks
                 bool isKeyEvent = wParam == WM_KEYDOWN || wParam == WM_KEYUP
                                 || wParam == WM_SYSKEYDOWN || wParam == WM_SYSKEYUP;
 
+                bool isAlt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+                bool isCtrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+
                 bool blockAltCombo =
                     (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
-                    (vkCode == VK_TAB || vkCode == VK_ESCAPE) &&
-                    (GetAsyncKeyState(0x12) & 0x8000) != 0;
+                    isAlt &&
+                    (vkCode == VK_TAB || vkCode == VK_ESCAPE || vkCode == VK_F4);
 
-                if ((isWinKey && isKeyEvent) || blockAltCombo)
+                bool blockCtrlCombo =
+                    (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
+                    isCtrl &&
+                    vkCode == VK_ESCAPE;
+
+                if ((isWinKey && isKeyEvent) || blockAltCombo || blockCtrlCombo)
                     return (IntPtr)1; // swallow it, both down AND up
             }
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
@@ -52,7 +64,11 @@ namespace BaronDesk.LockUI.Hooks
 
         public void Dispose()
         {
-            if (_hookId != IntPtr.Zero) UnhookWindowsHookEx(_hookId);
+            if (_hookId != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_hookId);
+                _hookId = IntPtr.Zero;
+            }
         }
 
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);

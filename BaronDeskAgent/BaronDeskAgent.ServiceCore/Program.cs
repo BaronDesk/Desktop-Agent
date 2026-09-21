@@ -5,6 +5,7 @@ using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Data.Database;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
 using BaronDeskAgent.ServiceCore.Hardware;
+using BaronDeskAgent.ServiceCore.Ipc;
 using BaronDeskAgent.ServiceCore.Security;
 using BaronDeskAgent.ServiceCore.Services;
 using BaronDeskAgent.ServiceCore.Services.Commands;
@@ -89,6 +90,9 @@ builder.Services.AddSingleton<SessionService>();
 builder.Services.AddSingleton<LeaseManager>();
 builder.Services.AddSingleton<GameService>();
 builder.Services.AddSingleton<SystemPowerService>();
+
+builder.Services.AddSingleton<PipeServer>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PipeServer>());
 
 // ---------------------------------------------------------
 // Monitoring & Communication Workers

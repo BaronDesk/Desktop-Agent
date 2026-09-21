@@ -5,18 +5,25 @@ using BaronDesk.Shared.Contracts;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+
 namespace BaronDesk.LockUI.Ipc
 {
     public class PipeClient
     {
         private readonly Action<Guid?> _onShowLock;
         private readonly Action<Guid?> _onHideLock;
+        private readonly Action<bool, string?>? _onPinResult;
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
         private StreamWriter? _writer;
 
-        public PipeClient(Action<Guid?> onShowLock, Action<Guid?> onHideLock)
+        public PipeClient(
+            Action<Guid?> onShowLock,
+            Action<Guid?> onHideLock,
+            Action<bool, string?>? onPinResult = null)
         {
             _onShowLock = onShowLock;
             _onHideLock = onHideLock;
+            _onPinResult = onPinResult;
         }
 
         public async Task ConnectAndListenAsync(CancellationToken token)
@@ -30,13 +37,22 @@ namespace BaronDesk.LockUI.Ipc
 
                     using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
                     using var writer = new StreamWriter(pipe, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
-                    _writer = writer;
+
+                    await _sendLock.WaitAsync(token);
+                    try
+                    {
+                        _writer = writer;
+                    }
+                    finally
+                    {
+                        _sendLock.Release();
+                    }
 
                     _ = SendAliveLoopAsync(token);
 
                     while (pipe.IsConnected && !token.IsCancellationRequested)
                     {
-                        var line = await reader.ReadLineAsync();
+                        var line = await reader.ReadLineAsync(token);
                         if (line is null) break;
 
                         HandleIncoming(line);
@@ -48,10 +64,25 @@ namespace BaronDesk.LockUI.Ipc
                 }
                 finally
                 {
-                    _writer = null;
+                    await _sendLock.WaitAsync(CancellationToken.None);
+                    try
+                    {
+                        _writer = null;
+                    }
+                    finally
+                    {
+                        _sendLock.Release();
+                    }
                 }
 
-                await Task.Delay(2000, token);
+                try
+                {
+                    await Task.Delay(2000, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
 
@@ -70,23 +101,40 @@ namespace BaronDesk.LockUI.Ipc
                 case PipeMessageKind.HideLock:
                     _onHideLock(msg.CommandId);
                     break;
+                case PipeMessageKind.PinResult:
+                    bool isSuccess = string.Equals(msg.Payload, "SUCCESS", StringComparison.OrdinalIgnoreCase);
+                    _onPinResult?.Invoke(isSuccess, msg.Payload);
+                    break;
             }
         }
 
-        public async Task SendAsync(PipeMessageKind kind, Guid? commandId)
+        public async Task SendAsync(PipeMessageKind kind, Guid? commandId, string? payload = null)
         {
-            if (_writer is null) return;
-            var msg = new PipeMessage { Kind = kind, CommandId = commandId };
-            var json = JsonSerializer.Serialize(msg);
-            await _writer.WriteLineAsync(json);
+            await _sendLock.WaitAsync();
+            try
+            {
+                if (_writer is null) return;
+                var msg = new PipeMessage { Kind = kind, CommandId = commandId, Payload = payload };
+                var json = JsonSerializer.Serialize(msg);
+                await _writer.WriteLineAsync(json);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        public Task SubmitPinAsync(string pin)
+        {
+            return SendAsync(PipeMessageKind.SubmitPin, null, pin);
         }
 
         private async Task SendAliveLoopAsync(CancellationToken token)
         {
-            while (_writer is not null && !token.IsCancellationRequested)
+            while (!token.IsCancellationRequested)
             {
-                await SendAsync(PipeMessageKind.HelperAlive, null);
                 await Task.Delay(TimeSpan.FromSeconds(15), token);
+                await SendAsync(PipeMessageKind.HelperAlive, null);
             }
         }
     }

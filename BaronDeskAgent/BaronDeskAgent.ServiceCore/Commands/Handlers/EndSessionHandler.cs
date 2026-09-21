@@ -56,7 +56,7 @@ public sealed class EndSessionCommandHandler : ICommandHandler
         }
 
         await _sessionService.EndSessionAsync(reason, cancellationToken);
-        await _lockService.LockAsync(cancellationToken);
+        await _lockService.LockAsync(command.Id, cancellationToken);
         _leaseManager.RevokeLease();
 
         return new CommandResponse
