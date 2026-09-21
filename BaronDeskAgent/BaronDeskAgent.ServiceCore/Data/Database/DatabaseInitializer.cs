@@ -1,4 +1,4 @@
-﻿using Microsoft.Data.Sqlite;
+using Microsoft.Data.Sqlite;
 
 namespace BaronDeskAgent.ServiceCore.Data.Database;
 
@@ -49,10 +49,55 @@ public sealed class DatabaseInitializer
             CREATE INDEX IF NOT EXISTS
                 IX_OutboxMessages_CreatedAt
             ON OutboxMessages (CreatedAt);
+
+            CREATE TABLE IF NOT EXISTS GameCatalog
+            (
+                GameId TEXT PRIMARY KEY,
+
+                Name TEXT NOT NULL,
+
+                ExecutablePath TEXT NOT NULL,
+
+                LaunchArguments TEXT,
+
+                WorkingDirectory TEXT,
+
+                CreatedAt TEXT NOT NULL,
+
+                UpdatedAt TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS
+                IX_GameCatalog_Name
+            ON GameCatalog (Name);
             """;
 
         await command.ExecuteNonQueryAsync(
             cancellationToken);
+
+        // Seed default test game if catalog is empty
+        await using var checkCmd = connection.CreateCommand();
+        checkCmd.CommandText = "SELECT COUNT(1) FROM GameCatalog;";
+        var count = Convert.ToInt64(await checkCmd.ExecuteScalarAsync(cancellationToken));
+
+        if (count == 0)
+        {
+            var systemRoot = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            var notepadPath = System.IO.Path.Combine(systemRoot, "notepad.exe");
+            var nowIso = DateTimeOffset.UtcNow.ToString("O");
+
+            await using var seedCmd = connection.CreateCommand();
+            seedCmd.CommandText =
+                """
+                INSERT INTO GameCatalog (GameId, Name, ExecutablePath, LaunchArguments, WorkingDirectory, CreatedAt, UpdatedAt)
+                VALUES ('notepad', 'Notepad (Test Game)', $path, NULL, $workDir, $now, $now);
+                """;
+            seedCmd.Parameters.AddWithValue("$path", notepadPath);
+            seedCmd.Parameters.AddWithValue("$workDir", systemRoot);
+            seedCmd.Parameters.AddWithValue("$now", nowIso);
+            await seedCmd.ExecuteNonQueryAsync(cancellationToken);
+            _logger.LogInformation("Seeded default test game entry ('notepad') into GameCatalog.");
+        }
 
         _logger.LogInformation(
             "SQLite database initialized at {DatabasePath}.",
