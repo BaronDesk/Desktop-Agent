@@ -1,4 +1,4 @@
-﻿using BaronDesk.Shared.Contracts;
+using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Services.Commands;
 
 namespace BaronDeskAgent.ServiceCore.Commands.Handlers;
@@ -28,6 +28,7 @@ public sealed class LockCommandHandler : ICommandHandler
             command.Id);
 
         await _lockService.LockAsync(
+            command.Id,
             cancellationToken);
 
         return new CommandResponse

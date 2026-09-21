@@ -6,6 +6,11 @@ public sealed class LockService
 
     private int _isLocked;
 
+    /// <summary>
+    /// Event triggered when lock state changes: (isLocked, commandId, cancellationToken).
+    /// </summary>
+    public event Func<bool, Guid?, CancellationToken, Task>? OnLockStateChanged;
+
     public LockService(
         ILogger<LockService> logger)
     {
@@ -20,45 +25,51 @@ public sealed class LockService
             0,
             0) == 1;
 
-    public Task LockAsync(
+    public async Task LockAsync(
+        Guid? commandId,
         CancellationToken cancellationToken = default)
     {
         if (IsLocked)
         {
-            _logger.LogInformation(
-                "Agent is already locked.");
-
-            return Task.CompletedTask;
+            _logger.LogInformation("Agent is already locked.");
+            return;
         }
 
-        Interlocked.Exchange(
-            ref _isLocked,
-            1);
+        Interlocked.Exchange(ref _isLocked, 1);
+        _logger.LogInformation("Agent lock state changed to LOCKED (CommandId={CommandId}).", commandId);
 
-        _logger.LogInformation(
-            "Agent lock state changed to LOCKED.");
-
-        return Task.CompletedTask;
+        if (OnLockStateChanged is not null)
+        {
+            await OnLockStateChanged.Invoke(true, commandId, cancellationToken);
+        }
     }
 
-    public Task UnlockAsync(
+    public Task LockAsync(CancellationToken cancellationToken = default)
+    {
+        return LockAsync(null, cancellationToken);
+    }
+
+    public async Task UnlockAsync(
+        Guid? commandId,
         CancellationToken cancellationToken = default)
     {
         if (!IsLocked)
         {
-            _logger.LogInformation(
-                "Agent is already unlocked.");
-
-            return Task.CompletedTask;
+            _logger.LogInformation("Agent is already unlocked.");
+            return;
         }
 
-        Interlocked.Exchange(
-            ref _isLocked,
-            0);
+        Interlocked.Exchange(ref _isLocked, 0);
+        _logger.LogInformation("Agent lock state changed to UNLOCKED (CommandId={CommandId}).", commandId);
 
-        _logger.LogInformation(
-            "Agent lock state changed to UNLOCKED.");
+        if (OnLockStateChanged is not null)
+        {
+            await OnLockStateChanged.Invoke(false, commandId, cancellationToken);
+        }
+    }
 
-        return Task.CompletedTask;
+    public Task UnlockAsync(CancellationToken cancellationToken = default)
+    {
+        return UnlockAsync(null, cancellationToken);
     }
 }
