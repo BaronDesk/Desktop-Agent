@@ -1,4 +1,4 @@
-﻿using System.Windows;
+﻿﻿using System.Windows;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
 using BaronDesk.LockUI.Hooks;
