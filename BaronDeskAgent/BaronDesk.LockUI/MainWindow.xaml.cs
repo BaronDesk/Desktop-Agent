@@ -1,24 +1,236 @@
-﻿using System.Text;
+using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using BaronDesk.LockUI.Hooks;
+using BaronDesk.LockUI.Ipc;
+using BaronDesk.Shared.Contracts;
+using Microsoft.Win32;
 
 namespace BaronDesk.LockUI
 {
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
     public partial class MainWindow : Window
     {
+        private const int MOD_WIN = 0x0008;
+        private const int HOTKEY_ID = 9000;
+
+        [DllImport("user32.dll")]
+        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [DllImport("user32.dll")]
+        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        private readonly KeyboardHook _keyboardHook = new();
+        private readonly CancellationTokenSource _cts = new();
+        private readonly PipeClient _client;
+        private bool _isLocked = true;
+        private bool _hotKeyRegistered = false;
+
         public MainWindow()
         {
             InitializeComponent();
+
+            _client = new PipeClient(
+                onShowLock: id => Dispatcher.Invoke(() => ShowLockScreen(id)),
+                onHideLock: id => Dispatcher.Invoke(() => HideLockScreen(id)),
+                onPinResult: OnPinResult);
+
+            _ = _client.ConnectAndListenAsync(_cts.Token);
+        }
+
+        private void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            ApplyVirtualScreenBounds();
+            ShowLockScreen(null);
+        }
+
+        private void ApplyVirtualScreenBounds()
+        {
+            Left = SystemParameters.VirtualScreenLeft;
+            Top = SystemParameters.VirtualScreenTop;
+            Width = SystemParameters.VirtualScreenWidth;
+            Height = SystemParameters.VirtualScreenHeight;
+        }
+
+        private async void ShowLockScreen(Guid? commandId)
+        {
+            ApplyVirtualScreenBounds();
+            Show();
+            Activate();
+            Topmost = true;
+
+            _keyboardHook.Install();
+            _isLocked = true;
+            SetTaskManagerPolicy(disabled: true);
+
+            var helper = new WindowInteropHelper(this);
+            if (!_hotKeyRegistered)
+            {
+                _hotKeyRegistered = RegisterHotKey(helper.Handle, HOTKEY_ID, MOD_WIN, 0);
+            }
+
+            StatusText.Text = string.Empty;
+            PinBox.Password = string.Empty;
+            PinBox.Focus();
+
+            try
+            {
+                await _client.SendAsync(PipeMessageKind.LockShown, commandId);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SendAsync failed: {ex.Message}");
+            }
+        }
+
+        private async void HideLockScreen(Guid? commandId)
+        {
+            _keyboardHook.Dispose();
+            _isLocked = false;
+            SetTaskManagerPolicy(disabled: false);
+
+            if (_hotKeyRegistered)
+            {
+                var helper = new WindowInteropHelper(this);
+                UnregisterHotKey(helper.Handle, HOTKEY_ID);
+                _hotKeyRegistered = false;
+            }
+
+            StatusText.Text = string.Empty;
+            PinBox.Password = string.Empty;
+            Hide();
+
+            try
+            {
+                await _client.SendAsync(PipeMessageKind.LockHidden, commandId);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SendAsync failed: {ex.Message}");
+            }
+        }
+
+        private void OnUnlockClick(object sender, RoutedEventArgs e)
+        {
+            SubmitPin();
+        }
+
+        private void OnPinKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                SubmitPin();
+            }
+        }
+
+        private async void SubmitPin()
+        {
+            var pin = PinBox.Password?.Trim();
+            if (string.IsNullOrWhiteSpace(pin))
+            {
+                StatusText.Text = "Please enter your booking PIN.";
+                StatusText.Foreground = Brushes.OrangeRed;
+                return;
+            }
+
+            StatusText.Text = "Verifying PIN...";
+            StatusText.Foreground = Brushes.DeepSkyBlue;
+
+            try
+            {
+                await _client.SubmitPinAsync(pin);
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = "Failed to communicate with service.";
+                StatusText.Foreground = Brushes.OrangeRed;
+                System.Diagnostics.Debug.WriteLine($"SubmitPin failed: {ex.Message}");
+            }
+        }
+
+        private void OnPinResult(bool success, string? payload)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (success)
+                {
+                    StatusText.Text = "PIN verified! Unlocking...";
+                    StatusText.Foreground = Brushes.LightGreen;
+                    PinBox.Password = string.Empty;
+                }
+                else if (payload?.StartsWith("LOCKED_OUT:", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    var seconds = payload.Split(':').LastOrDefault() ?? "30";
+                    StatusText.Text = $"Too many attempts. Try again in {seconds}s.";
+                    StatusText.Foreground = Brushes.OrangeRed;
+                    PinBox.Password = string.Empty;
+                    UnlockButton.IsEnabled = false;
+                    _ = ReEnableAfterLockoutAsync(int.TryParse(seconds, out var s) ? s : 30);
+                }
+                else
+                {
+                    StatusText.Text = "Invalid PIN. Please try again.";
+                    StatusText.Foreground = Brushes.OrangeRed;
+                    PinBox.Password = string.Empty;
+                    PinBox.Focus();
+                }
+            });
+        }
+
+        private async Task ReEnableAfterLockoutAsync(int seconds)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(seconds));
+            Dispatcher.Invoke(() =>
+            {
+                UnlockButton.IsEnabled = true;
+                StatusText.Text = "You may try again.";
+                StatusText.Foreground = Brushes.DeepSkyBlue;
+                PinBox.Focus();
+            });
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _cts.Cancel();
+            _keyboardHook.Dispose();
+            SetTaskManagerPolicy(disabled: false);
+            base.OnClosed(e);
+        }
+
+        /// <summary>
+        /// Disables/enables Task Manager via registry to prevent users from
+        /// killing the lock screen process while station is locked.
+        /// </summary>
+        private static void SetTaskManagerPolicy(bool disabled)
+        {
+            try
+            {
+                const string keyPath = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+                using var key = Registry.CurrentUser.CreateSubKey(keyPath, writable: true);
+                if (disabled)
+                {
+                    key.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
+                }
+                else
+                {
+                    key.DeleteValue("DisableTaskMgr", throwOnMissingValue: false);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SetTaskManagerPolicy failed: {ex.Message}");
+            }
+        }
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            if (_isLocked)
+            {
+                e.Cancel = true;
+                return;
+            }
+            base.OnClosing(e);
         }
     }
 }

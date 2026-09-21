@@ -1,9 +1,8 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 
 using BaronDesk.Shared.Models;
-
-using BaronDeskAgent.ServiceCore.Services;
+using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
@@ -207,7 +206,7 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
         var telemetry =
             new DeviceTelemetry
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = DateTimeOffset.UtcNow,
                 DeviceType = "Device",
                 DeviceName = device.DeviceName,
                 ProductId = device.ProductId,
@@ -251,7 +250,7 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
         var telemetry =
             new DeviceTelemetry
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = DateTimeOffset.UtcNow,
                 DeviceType = "Device",
                 DeviceName = device.DeviceName,
                 ProductId = device.ProductId,

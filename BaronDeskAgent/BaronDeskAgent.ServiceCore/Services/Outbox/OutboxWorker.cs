@@ -1,6 +1,7 @@
-﻿using System.Text.Json;
-using BaronDesk.Shared.Models;
+using System.Text.Json;
+using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Data.Repositories;
+using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 namespace BaronDeskAgent.ServiceCore.Services.Outbox;
 
@@ -88,7 +89,7 @@ public sealed class OutboxWorker : BackgroundService
         try
         {
             var envelope =
-                JsonSerializer.Deserialize<TelemetryEnvelope>(
+                JsonSerializer.Deserialize<Envelope>(
                     message.Payload);
 
             if (envelope is null)
@@ -118,7 +119,7 @@ public sealed class OutboxWorker : BackgroundService
                 "Outbox message sent successfully. " +
                 "Type={Type}, Sequence={Sequence}, Id={Id}",
                 envelope.Type,
-                envelope.Sequence,
+                envelope.Seq,
                 envelope.Id);
         }
         catch (OperationCanceledException)

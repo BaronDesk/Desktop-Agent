@@ -1,4 +1,4 @@
-# BaronDesk Agent — Hardware Telemetry & Outbox
+# BaronDesk Agent : Hardware Telemetry & Outbox
 
 This document describes the current implementation of hardware telemetry
 and the SQLite outbox in `BaronDeskAgent.ServiceCore`.
@@ -11,15 +11,26 @@ and the SQLite outbox in `BaronDeskAgent.ServiceCore`.
 BaronDeskAgent
 │
 ├── BaronDesk.Shared
+│   ├── Contracts
+│   │   ├── Envelope.cs
+│   │   ├── AgentJsonContext.cs
+│   │   ├── MessageTypes.cs
+│   │   ├── CommandTypes.cs
+│   │   ├── CommandRequest.cs
+│   │   ├── CommandResponse.cs
+│   │   └── PipeMessage.cs
+│   │
 │   └── Models
 │       ├── HardwareTelemetry.cs
-│       ├── DeviceTelemetry.cs
-│       └── TelemetryEnvelope.cs
+│       ├── DeviceTelemtry.cs
+│       ├── HardwareTelemetryPayload.cs
+│       └── NodeTelemetryMetric.cs
 │
 └── BaronDeskAgent.ServiceCore
     │
     ├── Hardware
     │   ├── HardwareSensorReader.cs
+    │   ├── HardwareTelemetryMapper.cs
     │   ├── HardwareMonitorService.cs
     │   ├── WindowsDeviceEnumerator.cs
     │   └── WindowsDeviceMonitorService.cs
@@ -52,12 +63,10 @@ BaronDeskAgent
 
 Hardware monitoring collects:
 
-- CPU usage
-- RAM usage
-- GPU usage
-- GPU memory
-- GPU temperatures
-- Fan information when available
+- CPU usage, temperature, and core loads
+- RAM usage, available RAM, total RAM, and usage percent
+- GPU load, temperatures (core, hotspot, memory), and VRAM metrics
+- Fan information and speeds when available
 
 ### Pipeline
 
@@ -66,16 +75,21 @@ HardwareSensorReader
         │
         ▼
 HardwareMonitorService
-        │
         │ every ~5 seconds
         ▼
 HardwareTelemetry
         │
         ▼
-TelemetryService
+HardwareTelemetryMapper
         │
         ▼
-LoggingTelemetryTransport
+HardwareTelemetryPayload (IReadOnlyList<NodeTelemetryMetric>)
+        │
+        ▼
+TelemetryService (Wraps in Envelope with monotonic sequence)
+        │
+        ▼
+LoggingTelemetryTransport (ITelemetryTransport)
 ```
 
 Hardware telemetry is live-only and is **not stored in the SQLite outbox**.
@@ -84,7 +98,7 @@ Hardware telemetry is live-only and is **not stored in the SQLite outbox**.
 
 ## 2. Device Monitoring
 
-Windows device changes are monitored separately.
+Windows device changes are monitored separately using Win32 SetupAPI device enumeration and window message events.
 
 ### Pipeline
 
@@ -95,7 +109,10 @@ WindowsDeviceMonitorService
 DeviceTelemetry
         │
         ▼
-TelemetryService
+TelemetryService (Wraps in Envelope with monotonic sequence)
+        │
+        ▼
+LoggingTelemetryTransport / Outbox
 ```
 
 Device events such as device connected and device disconnected are treated
@@ -118,18 +135,33 @@ TelemetryMessagePolicy
    │
    ├── heartbeat ────────► Live only
    │
+   ├── alert ────────────► SQLite Outbox
+   ├── command_ack ──────► SQLite Outbox
+   ├── command_nack ─────► SQLite Outbox
+   ├── state_report ─────► SQLite Outbox
    └── device_event ─────► SQLite Outbox
 ```
 
-Current durable message types include:
+Durable message types include:
 
 ```text
+alert
+command_ack
+command_nack
+state_report
 device_event
 session_started
 session_ended
 lease_changed
 command_acknowledgement
 agent_status_changed
+```
+
+Live-only message types include:
+
+```text
+telemetry
+heartbeat
 ```
 
 ---
@@ -159,7 +191,7 @@ SQLite
 OutboxWorker
       │
       ▼
-Telemetry Transport
+ITelemetryTransport (Envelope)
 ```
 
 The outbox stores:
@@ -182,7 +214,7 @@ When `OutboxWorker` successfully sends a message:
 SQLite Outbox
       │
       ▼
-Send message
+Send message (Envelope)
       │
       ▼
 Success
@@ -198,26 +230,33 @@ Successfully delivered messages are removed from the outbox.
 ## 6. Current Overall Pipeline
 
 ```text
-                         ┌─────────────────────┐
-                         │ HardwareSensorReader │
-                         └──────────┬──────────┘
+                         ┌───────────────────────┐
+                         │ HardwareSensorReader  │
+                         └──────────┬────────────┘
                                     │
-                              every ~5 sec
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │ HardwareMonitor     │
-                         │ Service             │
-                         └──────────┬──────────┘
+                               every ~5 sec
                                     │
                                     ▼
-                         ┌─────────────────────┐
-                         │ TelemetryService    │
-                         └──────────┬──────────┘
+                         ┌───────────────────────┐
+                         │ HardwareMonitorService│
+                         └──────────┬────────────┘
+                                    │
+                                    ▼
+                         ┌───────────────────────┐
+                         │HardwareTelemetryMapper│
+                         └──────────┬────────────┘
+                                    │
+                         HardwareTelemetryPayload
+                                    │
+                                    ▼
+                         ┌───────────────────────┐
+                         │   TelemetryService    │
+                         │ (Monotonic Sequence)  │
+                         └──────────┬────────────┘
                                     │
                          ┌──────────┴──────────┐
                          │                     │
-                   telemetry             device_event
+                     telemetry             device_event / alert
                          │                     │
                          ▼                     ▼
                    Live Transport        SQLite Outbox
@@ -231,28 +270,68 @@ Successfully delivered messages are removed from the outbox.
 
 ---
 
+## 7. Wire Protocol Envelope
+
+All messages sent across transports adhere to the unified envelope specification:
+
+```csharp
+public sealed record Envelope
+{
+    public required string Type { get; init; }
+    public required Guid Id { get; init; }
+    public required DateTimeOffset Ts { get; init; }
+    public required long Seq { get; init; }
+    public object? Payload { get; init; }
+}
+```
+
+Serialized JSON format:
+
+```json
+{
+  "type": "telemetry",
+  "id": "c7a8b2d1-0f4b-4f91-8e56-2e8c1a2b3c4d",
+  "ts": "2026-09-20T11:22:33.456Z",
+  "seq": 1,
+  "payload": {
+    "timestamp": "2026-09-20T11:22:33.456Z",
+    "metrics": [
+      {
+        "metric": "cpu.load_percent",
+        "value": 14.2,
+        "sampledAt": "2026-09-20T11:22:33.456Z"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## Current Status
 
 ### Hardware Telemetry
 
-- [x] CPU monitoring
-- [x] RAM monitoring
-- [x] GPU monitoring
-- [x] Fan monitoring
-- [x] Periodic sampling
-- [x] Central `TelemetryService`
-- [x] Live transport
-- [x] Not stored in SQLite
+- [x] CPU monitoring (load, temperature, core max load)
+- [x] RAM monitoring (used, available, total, percent)
+- [x] GPU monitoring (load, temperature, hotspot, memory temp, VRAM)
+- [x] Fan monitoring (speed RPM)
+- [x] Flat metric mapping via `HardwareTelemetryMapper` (`NodeTelemetryMetric`)
+- [x] Periodic sampling via `PeriodicTimer`
+- [x] Central `TelemetryService` with monotonic sequence counter
+- [x] Unified `Envelope` serialization
+- [x] Live transport (`LoggingTelemetryTransport`)
+- [x] Live metrics excluded from SQLite outbox
 
 ### Outbox
 
-- [x] SQLite persistence
-- [x] Important message classification
-- [x] Device events stored
-- [x] Outbox worker
-- [x] Pending message retrieval
+- [x] SQLite persistence via `OutboxRepository`
+- [x] Message durability classification via `TelemetryMessagePolicy`
+- [x] Outbox worker background service (`OutboxWorker`)
+- [x] Pending batch retrieval
+- [x] Unified `Envelope` deserialization and sending
 - [x] Successful message deletion
-- [x] Attempt counter
-- [ ] Real WebSocket transport
-- [ ] Network failure/retry testing
-- [ ] Retry backoff
+- [x] Attempt counter increments on retry
+- [x] Real WebSocket transport integration (`WebSocketTelemetryTransport`)
+- [x] Network failure / exponential backoff with jitter (`ConnectionWorker`)
+- [ ] Bounded outbox storage policy (drop oldest telemetry on overflow, keep alerts)
