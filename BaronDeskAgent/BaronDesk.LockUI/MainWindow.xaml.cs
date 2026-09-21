@@ -23,8 +23,7 @@ namespace BaronDesk.LockUI
         public MainWindow()
         {
             InitializeComponent();
-            this.KeyDown += MainWindow_keyDown;
-            //Hide();
+            Hide();
 
             _client = new PipeClient(
                 onShowLock: id => Dispatcher.Invoke(() => ShowLockScreen(id)),
@@ -32,29 +31,14 @@ namespace BaronDesk.LockUI
 
             _ = _client.ConnectAndListenAsync(_cts.Token);
         }
-        private void MainWindow_keyDown(object sender,KeyEventArgs e)
-        {
-            if (e.Key == Key.Q)
-            {
-                HideLockScreen(null);
-            }
-        }
-
         private async void ShowLockScreen(Guid? commandId)
         {
             Show();
             Activate();
             _keyboardHook.Install();
-            System.Diagnostics.Debug.WriteLine("Hook installed.");
             _isLocked = true; 
             var helper = new WindowInteropHelper(this);
             RegisterHotKey(helper.Handle, HOTKEY_ID, MOD_WIN, 0);
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(TimeSpan.FromSeconds(15));
-                Dispatcher.Invoke(() => HideLockScreen(null));
-            });
-
             try
             {
                 if (_client is not null)
@@ -97,7 +81,5 @@ namespace BaronDesk.LockUI
             }
             base.OnClosing(e);
         }
-        private void TestShow_Click(object sender, RoutedEventArgs e) => ShowLockScreen(null);
-        private void TestForceHide_Click(object sender, RoutedEventArgs e) => HideLockScreen(null);
     }
 }
