@@ -18,19 +18,28 @@ public sealed class PipeServer : BackgroundService
 {
     private readonly LockService _lockService;
     private readonly SessionService _sessionService;
+    private readonly LeaseManager _leaseManager;
     private readonly ILogger<PipeServer> _logger;
 
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private StreamWriter? _currentWriter;
     private NamedPipeServerStream? _currentPipe;
 
+    // Brute-force protection
+    private int _failedPinAttempts;
+    private DateTimeOffset _pinLockoutUntil = DateTimeOffset.MinValue;
+    private const int MaxPinAttempts = 5;
+    private static readonly TimeSpan PinLockoutDuration = TimeSpan.FromSeconds(30);
+
     public PipeServer(
         LockService lockService,
         SessionService sessionService,
+        LeaseManager leaseManager,
         ILogger<PipeServer> logger)
     {
         _lockService = lockService;
         _sessionService = sessionService;
+        _leaseManager = leaseManager;
         _logger = logger;
 
         _lockService.OnLockStateChanged += async (isLocked, commandId, ct) =>
@@ -190,19 +199,48 @@ public sealed class PipeServer : BackgroundService
 
     private async Task HandlePinSubmissionAsync(string? enteredPin, CancellationToken cancellationToken)
     {
+        // Brute-force rate limiting
+        if (DateTimeOffset.UtcNow < _pinLockoutUntil)
+        {
+            var remaining = (int)(_pinLockoutUntil - DateTimeOffset.UtcNow).TotalSeconds;
+            _logger.LogWarning("PIN submission rejected — lockout active for {Remaining}s.", remaining);
+            await SendAsync(PipeMessageKind.PinResult, null, $"LOCKED_OUT:{remaining}", cancellationToken);
+            return;
+        }
+
         _logger.LogInformation("Received PIN submission via LockUI IPC.");
 
         bool isValid = _sessionService.ValidatePin(enteredPin);
         if (isValid)
         {
             _logger.LogInformation("PIN validation succeeded via IPC! Unlocking workstation.");
+            Interlocked.Exchange(ref _failedPinAttempts, 0);
+
             await SendAsync(PipeMessageKind.PinResult, null, "SUCCESS", cancellationToken);
             await _lockService.UnlockAsync(null, cancellationToken);
+
+            // Grant lease only after successful PIN entry (Finding #7)
+            _leaseManager.UpdateLease(null);
         }
         else
         {
-            _logger.LogWarning("PIN validation failed via IPC.");
-            await SendAsync(PipeMessageKind.PinResult, null, "INVALID_PIN", cancellationToken);
+            var attempts = Interlocked.Increment(ref _failedPinAttempts);
+            _logger.LogWarning("PIN validation failed via IPC. Attempt #{Attempts}.", attempts);
+
+            if (attempts >= MaxPinAttempts)
+            {
+                _pinLockoutUntil = DateTimeOffset.UtcNow.Add(PinLockoutDuration);
+                Interlocked.Exchange(ref _failedPinAttempts, 0);
+                _logger.LogWarning(
+                    "Too many failed PIN attempts. Locked out for {Duration}s.",
+                    PinLockoutDuration.TotalSeconds);
+                await SendAsync(PipeMessageKind.PinResult, null,
+                    $"LOCKED_OUT:{(int)PinLockoutDuration.TotalSeconds}", cancellationToken);
+            }
+            else
+            {
+                await SendAsync(PipeMessageKind.PinResult, null, "INVALID_PIN", cancellationToken);
+            }
         }
     }
 

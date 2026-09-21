@@ -6,6 +6,7 @@ using System.Windows.Media;
 using BaronDesk.LockUI.Hooks;
 using BaronDesk.LockUI.Ipc;
 using BaronDesk.Shared.Contracts;
+using Microsoft.Win32;
 
 namespace BaronDesk.LockUI
 {
@@ -61,6 +62,7 @@ namespace BaronDesk.LockUI
 
             _keyboardHook.Install();
             _isLocked = true;
+            SetTaskManagerPolicy(disabled: true);
 
             var helper = new WindowInteropHelper(this);
             if (!_hotKeyRegistered)
@@ -86,6 +88,7 @@ namespace BaronDesk.LockUI
         {
             _keyboardHook.Dispose();
             _isLocked = false;
+            SetTaskManagerPolicy(disabled: false);
 
             if (_hotKeyRegistered)
             {
@@ -156,6 +159,15 @@ namespace BaronDesk.LockUI
                     StatusText.Foreground = Brushes.LightGreen;
                     PinBox.Password = string.Empty;
                 }
+                else if (payload?.StartsWith("LOCKED_OUT:", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    var seconds = payload.Split(':').LastOrDefault() ?? "30";
+                    StatusText.Text = $"Too many attempts. Try again in {seconds}s.";
+                    StatusText.Foreground = Brushes.OrangeRed;
+                    PinBox.Password = string.Empty;
+                    UnlockButton.IsEnabled = false;
+                    _ = ReEnableAfterLockoutAsync(int.TryParse(seconds, out var s) ? s : 30);
+                }
                 else
                 {
                     StatusText.Text = "Invalid PIN. Please try again.";
@@ -166,11 +178,49 @@ namespace BaronDesk.LockUI
             });
         }
 
+        private async Task ReEnableAfterLockoutAsync(int seconds)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(seconds));
+            Dispatcher.Invoke(() =>
+            {
+                UnlockButton.IsEnabled = true;
+                StatusText.Text = "You may try again.";
+                StatusText.Foreground = Brushes.DeepSkyBlue;
+                PinBox.Focus();
+            });
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             _cts.Cancel();
             _keyboardHook.Dispose();
+            SetTaskManagerPolicy(disabled: false);
             base.OnClosed(e);
+        }
+
+        /// <summary>
+        /// Disables/enables Task Manager via registry to prevent users from
+        /// killing the lock screen process while station is locked.
+        /// </summary>
+        private static void SetTaskManagerPolicy(bool disabled)
+        {
+            try
+            {
+                const string keyPath = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+                using var key = Registry.CurrentUser.CreateSubKey(keyPath, writable: true);
+                if (disabled)
+                {
+                    key.SetValue("DisableTaskMgr", 1, RegistryValueKind.DWord);
+                }
+                else
+                {
+                    key.DeleteValue("DisableTaskMgr", throwOnMissingValue: false);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SetTaskManagerPolicy failed: {ex.Message}");
+            }
         }
 
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)

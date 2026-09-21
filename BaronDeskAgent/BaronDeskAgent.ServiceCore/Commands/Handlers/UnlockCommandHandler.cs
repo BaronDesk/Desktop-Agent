@@ -69,20 +69,19 @@ public sealed class UnlockCommandHandler : ICommandHandler
 
         if (string.IsNullOrWhiteSpace(pin))
         {
-            // Direct unlock (admin dashboard action)
+            // Direct unlock (admin dashboard action) — grant lease immediately
             await _lockService.UnlockAsync(command.Id, cancellationToken);
+            _leaseManager.UpdateLease(null);
             _logger.LogInformation("Workstation unlocked directly for SessionId={SessionId}.", sessionId);
         }
         else
         {
-            // Booking unlock: Station remains locked until user enters PIN at the station LockUI
+            // Booking unlock: Station remains locked until user enters PIN at the station LockUI.
+            // Lease is deferred — granted by PipeServer after successful PIN validation.
             _logger.LogInformation(
                 "Workstation remains locked for SessionId={SessionId}. PIN entry required on LockUI.",
                 sessionId);
         }
-
-        // Grant initial authorization lease on unlock
-        _leaseManager.UpdateLease(null);
 
         return new CommandResponse
         {
