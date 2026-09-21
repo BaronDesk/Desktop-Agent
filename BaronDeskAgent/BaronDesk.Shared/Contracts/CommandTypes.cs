@@ -1,13 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace BaronDesk.Shared.Contracts;
 
-namespace BaronDesk.Shared.Contracts
+public static class CommandTypes
 {
-    public enum CommandType
-    {
-        Lock,
-        Unlock,
-        Shutdown
-    }
-}
+    public const string Lock = "LOCK";
+    public const string Unlock = "UNLOCK";
+    public const string Shutdown = "SHUTDOWN";
+    public const string LaunchGame = "LAUNCH_GAME";
+    public const string EndSession = "END_SESSION";
+    public const string PolicyUpdate = "POLICY_UPDATE";
+}
