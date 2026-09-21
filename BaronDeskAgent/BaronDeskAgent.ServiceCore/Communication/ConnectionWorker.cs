@@ -5,6 +5,7 @@ using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Security;
 using BaronDeskAgent.ServiceCore.Services.Commands;
+using BaronDeskAgent.ServiceCore.Services.Games;
 using BaronDeskAgent.ServiceCore.Services.Session;
 using Microsoft.Extensions.Options;
 
@@ -30,6 +31,7 @@ public sealed class ConnectionWorker : BackgroundService
     private readonly LockService _lockService;
     private readonly SessionService _sessionService;
     private readonly LeaseManager _leaseManager;
+    private readonly GameService _gameService;
     private readonly IOptions<AgentOptions> _options;
     private readonly ILogger<ConnectionWorker> _logger;
 
@@ -41,6 +43,7 @@ public sealed class ConnectionWorker : BackgroundService
         LockService lockService,
         SessionService sessionService,
         LeaseManager leaseManager,
+        GameService gameService,
         IOptions<AgentOptions> options,
         ILogger<ConnectionWorker> logger)
     {
@@ -51,6 +54,7 @@ public sealed class ConnectionWorker : BackgroundService
         _lockService = lockService;
         _sessionService = sessionService;
         _leaseManager = leaseManager;
+        _gameService = gameService;
         _options = options;
         _logger = logger;
     }
@@ -144,7 +148,7 @@ public sealed class ConnectionWorker : BackgroundService
         {
             Locked = _lockService.IsLocked,
             SessionId = _sessionService.CurrentSessionId,
-            RunningGameId = null,
+            RunningGameId = _gameService.CurrentRunningGameId,
             LeaseExpiresAt = _leaseManager.LeaseExpiresAt
         };
 

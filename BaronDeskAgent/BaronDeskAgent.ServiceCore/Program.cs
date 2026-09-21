@@ -34,6 +34,8 @@ builder.Services.AddSingleton<DatabaseInitializer>();
 
 builder.Services.AddSingleton<OutboxRepository>();
 
+builder.Services.AddSingleton<GameCatalogRepository>();
+
 // ---------------------------------------------------------
 // Security & Connection
 // ---------------------------------------------------------
@@ -88,6 +90,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<LockService>();
 builder.Services.AddSingleton<SessionService>();
 builder.Services.AddSingleton<LeaseManager>();
+builder.Services.AddSingleton<InteractiveProcessLauncher>();
 builder.Services.AddSingleton<GameService>();
 builder.Services.AddSingleton<SystemPowerService>();
 
@@ -111,6 +114,27 @@ builder.Services.AddHostedService<HeartbeatWorker>();
 // ---------------------------------------------------------
 
 var host = builder.Build();
+
+// ---------------------------------------------------------
+// Wire Session Teardown & Game Cleanup
+// ---------------------------------------------------------
+
+var sessionService = host.Services.GetRequiredService<SessionService>();
+var gameService = host.Services.GetRequiredService<GameService>();
+sessionService.OnSessionEnded += reason =>
+{
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            await gameService.StopCurrentGameAsync();
+        }
+        catch
+        {
+            // Ignore errors during background fail-closed stop
+        }
+    });
+};
 
 // ---------------------------------------------------------
 // Initialize SQLite

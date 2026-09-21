@@ -48,7 +48,8 @@ namespace BaronDesk.LockUI.Ipc
                         _sendLock.Release();
                     }
 
-                    _ = SendAliveLoopAsync(token);
+                    using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    _ = SendAliveLoopAsync(connectionCts.Token);
 
                     while (pipe.IsConnected && !token.IsCancellationRequested)
                     {
