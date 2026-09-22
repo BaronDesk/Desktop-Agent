@@ -1,3 +1,4 @@
+using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
@@ -7,6 +8,7 @@ public sealed class HardwareMonitorService : BackgroundService
 {
     private readonly HardwareSensorReader _sensorReader;
     private readonly HardwareTelemetryMapper _telemetryMapper;
+    private readonly HardwareAlertEvaluator _alertEvaluator;
     private readonly TelemetryService _telemetryService;
     private readonly ILogger<HardwareMonitorService> _logger;
 
@@ -16,11 +18,13 @@ public sealed class HardwareMonitorService : BackgroundService
     public HardwareMonitorService(
         HardwareSensorReader sensorReader,
         HardwareTelemetryMapper telemetryMapper,
+        HardwareAlertEvaluator alertEvaluator,
         TelemetryService telemetryService,
         ILogger<HardwareMonitorService> logger)
     {
         _sensorReader = sensorReader;
         _telemetryMapper = telemetryMapper;
+        _alertEvaluator = alertEvaluator;
         _telemetryService = telemetryService;
         _logger = logger;
     }
@@ -56,6 +60,45 @@ public sealed class HardwareMonitorService : BackgroundService
                 await _telemetryService.PublishHardwareAsync(
                     payload,
                     stoppingToken);
+
+                // ── Alert evaluation ─────────────────────
+                try
+                {
+                    IReadOnlyList<AlertPayload> alerts =
+                        _alertEvaluator.Evaluate(telemetry);
+
+                    foreach (AlertPayload alert in alerts)
+                    {
+                        await _telemetryService
+                            .PublishAlertAsync(
+                                alert,
+                                stoppingToken);
+
+                        _logger.LogWarning(
+                            "Hardware alert emitted: " +
+                            "Category={Category}, " +
+                            "Type={Type}, " +
+                            "Severity={Severity}, " +
+                            "Detail={Detail}",
+                            alert.Category,
+                            alert.Type,
+                            alert.Severity,
+                            alert.Detail);
+                    }
+                }
+                catch (OperationCanceledException)
+                    when (stoppingToken
+                        .IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception alertEx)
+                {
+                    _logger.LogError(
+                        alertEx,
+                        "Error during hardware alert " +
+                        "evaluation or publishing.");
+                }
             }
         }
         catch (OperationCanceledException)
@@ -77,4 +120,5 @@ public sealed class HardwareMonitorService : BackgroundService
                 "Hardware monitoring stopped.");
         }
     }
-}
+}
+

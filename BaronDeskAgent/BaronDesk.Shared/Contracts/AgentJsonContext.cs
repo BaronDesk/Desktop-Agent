@@ -29,6 +29,8 @@ namespace BaronDesk.Shared.Contracts;
 [JsonSerializable(typeof(HardwareTelemetryPayload))]
 [JsonSerializable(typeof(DeviceTelemetry))]
 [JsonSerializable(typeof(NodeTelemetryMetric))]
+[JsonSerializable(typeof(AlertPayload))]
+[JsonSerializable(typeof(Envelope<AlertPayload>))]
 public partial class AgentJsonContext : JsonSerializerContext
 {
 }
