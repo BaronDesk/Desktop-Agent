@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Configuration;
+using BaronDeskAgent.ServiceCore.Services.Policy;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 using Microsoft.Extensions.Options;
@@ -16,7 +17,7 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
 
     private readonly TelemetryService _telemetryService;
 
-    private readonly AgentOptions _options;
+    private readonly IPolicyStore _policyStore;
 
     private readonly ILogger<WindowsDeviceMonitorService> _logger;
 
@@ -52,11 +53,11 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
 
     public WindowsDeviceMonitorService(
         TelemetryService telemetryService,
-        IOptions<AgentOptions> options,
+        IPolicyStore policyStore,
         ILogger<WindowsDeviceMonitorService> logger)
     {
         _telemetryService = telemetryService;
-        _options = options.Value;
+        _policyStore = policyStore;
         _logger = logger;
 
         _channel =
@@ -320,7 +321,7 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
                 : device.ProductId);
 
         // ── Start debounce timer for anti-theft alert ────────
-        if (!_options.EnableAntiTheftAlerts)
+        if (!_policyStore.CurrentPolicy.EnableAntiTheftAlerts)
         {
             return;
         }
@@ -378,9 +379,10 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
                     pending.Cts.Token,
                     serviceStopping);
 
+            var debounceSeconds = _policyStore.CurrentPolicy.UsbDebounceWindowSeconds;
             await Task.Delay(
                 TimeSpan.FromSeconds(
-                    _options.UsbDebounceWindowSeconds),
+                    debounceSeconds),
                 linked.Token);
 
             // Timer expired → device did NOT reconnect.
@@ -407,7 +409,7 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
                 "Anti-theft alert: Peripheral not restored " +
                 "after {Window}s debounce | {DeviceName} | " +
                 "PID: {ProductId}",
-                _options.UsbDebounceWindowSeconds,
+                debounceSeconds,
                 pending.DeviceName,
                 string.IsNullOrWhiteSpace(pending.ProductId)
                     ? "N/A"

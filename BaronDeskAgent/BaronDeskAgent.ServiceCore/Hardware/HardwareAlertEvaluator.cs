@@ -1,8 +1,7 @@
 using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
-using BaronDeskAgent.ServiceCore.Configuration;
+using BaronDeskAgent.ServiceCore.Services.Policy;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
@@ -28,7 +27,7 @@ public sealed class HardwareAlertEvaluator
     /// </summary>
     private const double CriticalTempFactor = 1.1;
 
-    private readonly AgentOptions _options;
+    private readonly IPolicyStore _policyStore;
     private readonly ILogger<HardwareAlertEvaluator> _logger;
 
     // ── Cooldown: last time each metric type fired an alert ──────────
@@ -42,10 +41,10 @@ public sealed class HardwareAlertEvaluator
         new(StringComparer.OrdinalIgnoreCase);
 
     public HardwareAlertEvaluator(
-        IOptions<AgentOptions> options,
+        IPolicyStore policyStore,
         ILogger<HardwareAlertEvaluator> logger)
     {
-        _options = options.Value;
+        _policyStore = policyStore;
         _logger = logger;
     }
 
@@ -91,7 +90,7 @@ public sealed class HardwareAlertEvaluator
         }
 
         double temp = cpu.TemperatureC.Value;
-        double threshold = _options.CpuTempAlertThreshold;
+        double threshold = _policyStore.CurrentPolicy.CpuTempAlertThreshold;
         const string metricKey = "cpu_temp";
 
         // Hysteresis: re-arm if temperature drops below threshold
@@ -168,7 +167,7 @@ public sealed class HardwareAlertEvaluator
             }
 
             double temp = gpu.TemperatureC.Value;
-            double threshold = _options.GpuTempAlertThreshold;
+            double threshold = _policyStore.CurrentPolicy.GpuTempAlertThreshold;
             string metricKey = $"gpu_temp_{i}";
 
             // Hysteresis: re-arm.
@@ -247,7 +246,7 @@ public sealed class HardwareAlertEvaluator
         }
 
         double load = cpu.LoadPercent.Value;
-        double threshold = _options.CpuLoadAlertThreshold;
+        double threshold = _policyStore.CurrentPolicy.CpuLoadAlertThreshold;
         const string metricKey = "cpu_load";
 
         if (load < threshold)
@@ -289,7 +288,7 @@ public sealed class HardwareAlertEvaluator
         }
 
         double usage = ram.UsagePercent.Value;
-        double threshold = _options.RamLoadAlertThreshold;
+        double threshold = _policyStore.CurrentPolicy.RamLoadAlertThreshold;
         const string metricKey = "ram_usage";
 
         if (usage < threshold)
@@ -331,7 +330,7 @@ public sealed class HardwareAlertEvaluator
         }
 
         double cooldownSeconds =
-            _options.HardwareAlertCooldownSeconds;
+            _policyStore.CurrentPolicy.HardwareAlertCooldownSeconds;
 
         bool expired =
             DateTimeOffset.UtcNow - lastFired >=

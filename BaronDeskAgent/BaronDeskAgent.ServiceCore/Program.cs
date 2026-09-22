@@ -11,6 +11,7 @@ using BaronDeskAgent.ServiceCore.Services;
 using BaronDeskAgent.ServiceCore.Services.Commands;
 using BaronDeskAgent.ServiceCore.Services.Games;
 using BaronDeskAgent.ServiceCore.Services.Outbox;
+using BaronDeskAgent.ServiceCore.Services.Policy;
 using BaronDeskAgent.ServiceCore.Services.Session;
 using BaronDeskAgent.ServiceCore.Services.System;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
@@ -35,6 +36,10 @@ builder.Services.AddSingleton<DatabaseInitializer>();
 builder.Services.AddSingleton<OutboxRepository>();
 
 builder.Services.AddSingleton<GameCatalogRepository>();
+
+builder.Services.AddSingleton<PolicyRepository>();
+
+builder.Services.AddSingleton<IPolicyStore, PolicyStore>();
 
 // ---------------------------------------------------------
 // Security & Connection
@@ -148,6 +153,12 @@ using (var scope = host.Services.CreateScope())
             .GetRequiredService<DatabaseInitializer>();
 
     await databaseInitializer.InitializeAsync();
+
+    var policyStore =
+        scope.ServiceProvider
+            .GetRequiredService<IPolicyStore>();
+
+    await policyStore.InitializeAsync();
 }
 
 // ---------------------------------------------------------

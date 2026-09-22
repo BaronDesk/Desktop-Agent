@@ -1,7 +1,9 @@
 using BaronDesk.Shared.Contracts;
+using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Communication;
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Services.Commands;
+using BaronDeskAgent.ServiceCore.Services.Policy;
 using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Services.Session;
@@ -11,52 +13,73 @@ public sealed class HeartbeatWorker : BackgroundService
     private readonly IServerConnection _serverConnection;
     private readonly LockService _lockService;
     private readonly SessionService _sessionService;
-    private readonly IOptions<AgentOptions> _options;
+    private readonly IPolicyStore _policyStore;
     private readonly ILogger<HeartbeatWorker> _logger;
 
     public HeartbeatWorker(
         IServerConnection serverConnection,
         LockService lockService,
         SessionService sessionService,
-        IOptions<AgentOptions> options,
+        IPolicyStore policyStore,
         ILogger<HeartbeatWorker> logger)
     {
         _serverConnection = serverConnection;
         _lockService = lockService;
         _sessionService = sessionService;
-        _options = options;
+        _policyStore = policyStore;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var currentIntervalSeconds = _policyStore.CurrentPolicy.HeartbeatIntervalSeconds;
         _logger.LogInformation("HeartbeatWorker started with cadence of {Interval}s.",
-            _options.Value.HeartbeatIntervalSeconds);
+            currentIntervalSeconds);
 
-        var interval = TimeSpan.FromSeconds(Math.Max(1.0, _options.Value.HeartbeatIntervalSeconds));
+        var interval = TimeSpan.FromSeconds(Math.Max(1.0, currentIntervalSeconds));
         using var timer = new PeriodicTimer(interval);
 
-        while (!stoppingToken.IsCancellationRequested)
+        void OnPolicyUpdated(StationPolicy policy)
         {
-            try
+            var newInterval = TimeSpan.FromSeconds(Math.Max(1.0, policy.HeartbeatIntervalSeconds));
+            if (timer.Period != newInterval)
             {
-                await timer.WaitForNextTickAsync(stoppingToken);
+                _logger.LogInformation("HeartbeatWorker cadence updated to {Interval}s per policy update.",
+                    policy.HeartbeatIntervalSeconds);
+                timer.Period = newInterval;
+            }
+        }
 
-                if (!_serverConnection.IsConnected)
+        _policyStore.OnPolicyUpdated += OnPolicyUpdated;
+
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
                 {
-                    continue;
-                }
+                    await timer.WaitForNextTickAsync(stoppingToken);
 
-                await SendHeartbeatAsync(stoppingToken);
+                    if (!_serverConnection.IsConnected)
+                    {
+                        continue;
+                    }
+
+                    await SendHeartbeatAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to emit periodic heartbeat.");
+                }
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to emit periodic heartbeat.");
-            }
+        }
+        finally
+        {
+            _policyStore.OnPolicyUpdated -= OnPolicyUpdated;
         }
 
         _logger.LogInformation("HeartbeatWorker stopped.");
