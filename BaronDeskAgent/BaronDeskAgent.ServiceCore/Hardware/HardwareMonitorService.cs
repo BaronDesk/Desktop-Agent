@@ -1,5 +1,6 @@
 using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
+using BaronDeskAgent.ServiceCore.Services.Policy;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
@@ -10,22 +11,22 @@ public sealed class HardwareMonitorService : BackgroundService
     private readonly HardwareTelemetryMapper _telemetryMapper;
     private readonly HardwareAlertEvaluator _alertEvaluator;
     private readonly TelemetryService _telemetryService;
+    private readonly IPolicyStore _policyStore;
     private readonly ILogger<HardwareMonitorService> _logger;
-
-    private static readonly TimeSpan SampleInterval =
-        TimeSpan.FromSeconds(5);
 
     public HardwareMonitorService(
         HardwareSensorReader sensorReader,
         HardwareTelemetryMapper telemetryMapper,
         HardwareAlertEvaluator alertEvaluator,
         TelemetryService telemetryService,
+        IPolicyStore policyStore,
         ILogger<HardwareMonitorService> logger)
     {
         _sensorReader = sensorReader;
         _telemetryMapper = telemetryMapper;
         _alertEvaluator = alertEvaluator;
         _telemetryService = telemetryService;
+        _policyStore = policyStore;
         _logger = logger;
     }
 
@@ -34,14 +35,30 @@ public sealed class HardwareMonitorService : BackgroundService
     {
         _sensorReader.Start();
 
+        var currentCadence = _policyStore.CurrentPolicy.TelemetryCadenceSeconds;
         _logger.LogInformation(
-            "Hardware monitoring started.");
+            "Hardware monitoring started with cadence of {Cadence}s.",
+            currentCadence);
+
+        var interval = TimeSpan.FromSeconds(Math.Max(1.0, currentCadence));
+        using var timer = new PeriodicTimer(interval);
+
+        void OnPolicyUpdated(StationPolicy policy)
+        {
+            var newInterval = TimeSpan.FromSeconds(Math.Max(1.0, policy.TelemetryCadenceSeconds));
+            if (timer.Period != newInterval)
+            {
+                _logger.LogInformation(
+                    "Hardware telemetry cadence updated to {Cadence}s per policy update.",
+                    policy.TelemetryCadenceSeconds);
+                timer.Period = newInterval;
+            }
+        }
+
+        _policyStore.OnPolicyUpdated += OnPolicyUpdated;
 
         try
         {
-            using var timer =
-                new PeriodicTimer(SampleInterval);
-
             while (await timer.WaitForNextTickAsync(
                        stoppingToken))
             {
@@ -114,6 +131,7 @@ public sealed class HardwareMonitorService : BackgroundService
         }
         finally
         {
+            _policyStore.OnPolicyUpdated -= OnPolicyUpdated;
             _sensorReader.Stop();
 
             _logger.LogInformation(

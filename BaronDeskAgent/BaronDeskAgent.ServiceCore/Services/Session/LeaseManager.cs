@@ -1,5 +1,6 @@
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Services.Commands;
+using BaronDeskAgent.ServiceCore.Services.Policy;
 using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Services.Session;
@@ -8,7 +9,7 @@ public sealed class LeaseManager : IDisposable
 {
     private readonly SessionService _sessionService;
     private readonly LockService _lockService;
-    private readonly IOptions<AgentOptions> _options;
+    private readonly IPolicyStore _policyStore;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<LeaseManager> _logger;
     private readonly object _lock = new();
@@ -22,13 +23,13 @@ public sealed class LeaseManager : IDisposable
     public LeaseManager(
         SessionService sessionService,
         LockService lockService,
-        IOptions<AgentOptions> options,
+        IPolicyStore policyStore,
         TimeProvider timeProvider,
         ILogger<LeaseManager> logger)
     {
         _sessionService = sessionService;
         _lockService = lockService;
-        _options = options;
+        _policyStore = policyStore;
         _timeProvider = timeProvider;
         _logger = logger;
 
@@ -125,7 +126,7 @@ public sealed class LeaseManager : IDisposable
         }
 
         // Fallback to default lease duration if server did not specify
-        GrantLease(TimeSpan.FromSeconds(_options.Value.DefaultLeaseDurationSeconds));
+        GrantLease(TimeSpan.FromSeconds(_policyStore.CurrentPolicy.DefaultLeaseDurationSeconds));
     }
 
     /// <summary>
@@ -165,7 +166,7 @@ public sealed class LeaseManager : IDisposable
             if (diffTicks > 0)
             {
                 elapsedPastExpiry = (double)diffTicks / _timeProvider.TimestampFrequency;
-                if (elapsedPastExpiry > _options.Value.LeaseGracePeriodSeconds)
+                if (elapsedPastExpiry > _policyStore.CurrentPolicy.LeaseGracePeriodSeconds)
                 {
                     shouldFailClosed = true;
                     _hasActiveLease = false;
@@ -179,7 +180,7 @@ public sealed class LeaseManager : IDisposable
             _logger.LogWarning(
                 "Lease expired {Elapsed:F1}s ago (exceeded grace period of {Grace}s). Enforcing FAIL-CLOSED lockout.",
                 elapsedPastExpiry,
-                _options.Value.LeaseGracePeriodSeconds);
+                _policyStore.CurrentPolicy.LeaseGracePeriodSeconds);
 
             _ = EnforceFailClosedAsync();
         }
