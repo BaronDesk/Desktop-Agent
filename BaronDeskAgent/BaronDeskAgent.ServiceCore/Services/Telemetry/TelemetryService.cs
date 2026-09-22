@@ -1,19 +1,25 @@
+using System.Text.Json;
 using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
+using BaronDeskAgent.ServiceCore.Data.Entities;
+using BaronDeskAgent.ServiceCore.Data.Repositories;
 
 namespace BaronDeskAgent.ServiceCore.Services.Telemetry;
 
 public sealed class TelemetryService
 {
     private readonly ITelemetryTransport _transport;
+    private readonly OutboxRepository _outboxRepository;
     private readonly ILogger<TelemetryService> _logger;
     private long _sequence;
 
     public TelemetryService(
         ITelemetryTransport transport,
+        OutboxRepository outboxRepository,
         ILogger<TelemetryService> logger)
     {
         _transport = transport;
+        _outboxRepository = outboxRepository;
         _logger = logger;
     }
 
@@ -99,13 +105,59 @@ public sealed class TelemetryService
         }
         catch (Exception ex)
         {
-            _logger.LogError(
-                ex,
-                "Failed to send telemetry. Type={Type}, Id={Id}",
-                envelope.Type,
-                envelope.Id);
+            if (TelemetryMessagePolicy.RequiresOutbox(envelope.Type))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to transmit {Type} envelope over transport. Buffering in outbox for retry. Id={Id}",
+                    envelope.Type,
+                    envelope.Id);
 
-            throw;
+                try
+                {
+                    var serializedPayload = JsonSerializer.Serialize(
+                        envelope,
+                        AgentJsonContext.Default.Envelope);
+
+                    var outboxEntity = new OutboxMessageEntity
+                    {
+                        Id = envelope.Id,
+                        Type = envelope.Type,
+                        Payload = serializedPayload,
+                        CreatedAt = envelope.Ts,
+                        Attempts = 0
+                    };
+
+                    await _outboxRepository.InsertAsync(
+                        outboxEntity,
+                        cancellationToken);
+
+                    _logger.LogInformation(
+                        "Enqueued message to outbox: Type={Type}, Id={Id}",
+                        envelope.Type,
+                        envelope.Id);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception outboxEx)
+                {
+                    _logger.LogError(
+                        outboxEx,
+                        "Failed to persist message to outbox: Type={Type}, Id={Id}",
+                        envelope.Type,
+                        envelope.Id);
+                }
+            }
+            else
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Ephemeral telemetry send failed (no outbox buffering required). Type={Type}, Id={Id}",
+                    envelope.Type,
+                    envelope.Id);
+            }
         }
     }
 }

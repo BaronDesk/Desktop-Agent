@@ -22,7 +22,7 @@ BaronDeskAgent
 │   │
 │   └── Models
 │       ├── HardwareTelemetry.cs
-│       ├── DeviceTelemtry.cs
+│       ├── DeviceTelemetry.cs
 │       ├── HardwareTelemetryPayload.cs
 │       └── NodeTelemetryMetric.cs
 │

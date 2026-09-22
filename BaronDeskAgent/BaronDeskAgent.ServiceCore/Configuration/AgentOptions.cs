@@ -56,6 +56,11 @@ public sealed class AgentOptions
     public double MaxTimestampDriftSeconds { get; set; } = 60.0;
 
     /// <summary>
+    /// Cadence in seconds at which hardware sensors are polled and telemetry is emitted.
+    /// </summary>
+    public double TelemetryCadenceSeconds { get; set; } = 5.0;
+
+    /// <summary>
     /// Cadence in seconds at which the agent sends presence heartbeats to the server.
     /// </summary>
     public double HeartbeatIntervalSeconds { get; set; } = 15.0;

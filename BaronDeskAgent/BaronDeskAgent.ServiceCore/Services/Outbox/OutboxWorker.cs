@@ -43,7 +43,7 @@ public sealed class OutboxWorker : BackgroundService
 
                 if (messages.Count == 0)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         "Outbox is empty.");
 
                     await Task.Delay(
@@ -89,8 +89,9 @@ public sealed class OutboxWorker : BackgroundService
         try
         {
             var envelope =
-                JsonSerializer.Deserialize<Envelope>(
-                    message.Payload);
+                JsonSerializer.Deserialize(
+                    message.Payload,
+                    AgentJsonContext.Default.Envelope);
 
             if (envelope is null)
             {

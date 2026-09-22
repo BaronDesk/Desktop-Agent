@@ -1,7 +1,6 @@
 using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Services.Policy;
-using Microsoft.Extensions.Logging;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 

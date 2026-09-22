@@ -1,10 +1,8 @@
 using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
 using BaronDeskAgent.ServiceCore.Communication;
-using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Services.Commands;
 using BaronDeskAgent.ServiceCore.Services.Policy;
-using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Services.Session;
 

@@ -53,18 +53,19 @@ public sealed class PolicyStore : IPolicyStore
 
             if (entity is not null)
             {
+                var loadedPolicy = entity.ToModel();
                 lock (_lock)
                 {
-                    _currentPolicy = entity.ToModel();
+                    _currentPolicy = loadedPolicy;
                 }
 
                 _logger.LogInformation(
                     "Loaded active station policy from SQLite. Cadence={Cadence}s, Heartbeat={Heartbeat}s, Lease={Lease}s, UsbDebounce={Debounce}s, AntiTheft={AntiTheft}",
-                    _currentPolicy.TelemetryCadenceSeconds,
-                    _currentPolicy.HeartbeatIntervalSeconds,
-                    _currentPolicy.DefaultLeaseDurationSeconds,
-                    _currentPolicy.UsbDebounceWindowSeconds,
-                    _currentPolicy.EnableAntiTheftAlerts);
+                    loadedPolicy.TelemetryCadenceSeconds,
+                    loadedPolicy.HeartbeatIntervalSeconds,
+                    loadedPolicy.DefaultLeaseDurationSeconds,
+                    loadedPolicy.UsbDebounceWindowSeconds,
+                    loadedPolicy.EnableAntiTheftAlerts);
                 return;
             }
 
@@ -150,7 +151,7 @@ public sealed class PolicyStore : IPolicyStore
     {
         return new StationPolicy
         {
-            TelemetryCadenceSeconds = 5.0,
+            TelemetryCadenceSeconds = options.TelemetryCadenceSeconds > 0 ? options.TelemetryCadenceSeconds : 5.0,
             HeartbeatIntervalSeconds = options.HeartbeatIntervalSeconds > 0 ? options.HeartbeatIntervalSeconds : 15.0,
             DefaultLeaseDurationSeconds = options.DefaultLeaseDurationSeconds > 0 ? options.DefaultLeaseDurationSeconds : 60.0,
             LeaseGracePeriodSeconds = options.LeaseGracePeriodSeconds > 0 ? options.LeaseGracePeriodSeconds : 10.0,

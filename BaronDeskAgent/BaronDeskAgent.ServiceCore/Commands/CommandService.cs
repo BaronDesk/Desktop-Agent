@@ -1,4 +1,5 @@
-﻿using BaronDesk.Shared.Contracts;
+using System.Collections.Frozen;
+using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Commands.Handlers;
 
 namespace BaronDeskAgent.ServiceCore.Commands;
@@ -7,7 +8,7 @@ public sealed class CommandService
 {
     private readonly ILogger<CommandService> _logger;
 
-    private readonly IReadOnlyDictionary<string, ICommandHandler>
+    private readonly FrozenDictionary<string, ICommandHandler>
         _handlers;
 
     public CommandService(
@@ -16,7 +17,7 @@ public sealed class CommandService
     {
         _logger = logger;
 
-        _handlers = handlers.ToDictionary(
+        _handlers = handlers.ToFrozenDictionary(
             handler => handler.CommandType,
             StringComparer.OrdinalIgnoreCase);
     }

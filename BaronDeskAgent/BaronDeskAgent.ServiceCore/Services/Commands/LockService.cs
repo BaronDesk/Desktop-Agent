@@ -20,10 +20,7 @@ public sealed class LockService
     }
 
     public bool IsLocked =>
-        Interlocked.CompareExchange(
-            ref _isLocked,
-            0,
-            0) == 1;
+        Volatile.Read(ref _isLocked) == 1;
 
     public async Task LockAsync(
         Guid? commandId,
