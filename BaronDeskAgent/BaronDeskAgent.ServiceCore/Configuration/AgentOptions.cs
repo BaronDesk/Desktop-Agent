@@ -69,4 +69,39 @@ public sealed class AgentOptions
     /// Grace window in seconds after lease expiration before enforcing fail-closed station lockout.
     /// </summary>
     public double LeaseGracePeriodSeconds { get; set; } = 10.0;
+
+    /// <summary>
+    /// CPU temperature threshold in Celsius for emitting hardware warning alerts.
+    /// </summary>
+    public double CpuTempAlertThreshold { get; set; } = 85.0;
+
+    /// <summary>
+    /// GPU temperature threshold in Celsius for emitting hardware warning alerts.
+    /// </summary>
+    public double GpuTempAlertThreshold { get; set; } = 85.0;
+
+    /// <summary>
+    /// CPU load percentage threshold for emitting hardware warning alerts.
+    /// </summary>
+    public double CpuLoadAlertThreshold { get; set; } = 95.0;
+
+    /// <summary>
+    /// RAM usage percentage threshold for emitting hardware warning alerts.
+    /// </summary>
+    public double RamLoadAlertThreshold { get; set; } = 95.0;
+
+    /// <summary>
+    /// Cooldown window in seconds before repeating an alert for the same hardware metric.
+    /// </summary>
+    public double HardwareAlertCooldownSeconds { get; set; } = 60.0;
+
+    /// <summary>
+    /// Debounce window in seconds for USB disconnects to distinguish temporary flaps from true removal.
+    /// </summary>
+    public double UsbDebounceWindowSeconds { get; set; } = 5.0;
+
+    /// <summary>
+    /// Whether anti-theft peripheral monitoring alerts are enabled.
+    /// </summary>
+    public bool EnableAntiTheftAlerts { get; set; } = true;
 }

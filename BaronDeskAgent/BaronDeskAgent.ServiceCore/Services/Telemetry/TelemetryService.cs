@@ -57,6 +57,26 @@ public sealed class TelemetryService
             cancellationToken);
     }
 
+    public async Task PublishAlertAsync(
+        AlertPayload alertPayload,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(alertPayload);
+
+        var envelope = new Envelope
+        {
+            Type = MessageTypes.Alert,
+            Id = Guid.NewGuid(),
+            Ts = DateTimeOffset.UtcNow,
+            Seq = Interlocked.Increment(ref _sequence),
+            Payload = alertPayload
+        };
+
+        await SendAsync(
+            envelope,
+            cancellationToken);
+    }
+
     private async Task SendAsync(
         Envelope envelope,
         CancellationToken cancellationToken)

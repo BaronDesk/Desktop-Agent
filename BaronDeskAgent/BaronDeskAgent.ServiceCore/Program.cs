@@ -101,6 +101,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PipeServer>());
 // Monitoring & Communication Workers
 // ---------------------------------------------------------
 
+builder.Services.AddSingleton<HardwareAlertEvaluator>();
 builder.Services.AddHostedService<HardwareMonitorService>();
 
 builder.Services.AddHostedService<WindowsDeviceMonitorService>();

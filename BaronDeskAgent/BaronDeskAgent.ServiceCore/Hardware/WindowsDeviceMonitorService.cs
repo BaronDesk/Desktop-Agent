@@ -1,8 +1,12 @@
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
 
+using BaronDesk.Shared.Contracts;
 using BaronDesk.Shared.Models;
+using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Services.Telemetry;
+
+using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Hardware;
 
@@ -12,6 +16,8 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
 
     private readonly TelemetryService _telemetryService;
 
+    private readonly AgentOptions _options;
+
     private readonly ILogger<WindowsDeviceMonitorService> _logger;
 
     private readonly CMNotifyCallback _callback;
@@ -20,6 +26,17 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
         string,
         WindowsDeviceEnumerator.WindowsDeviceInfo>
         _presentDevices =
+            new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Pending disconnect debounce timers keyed by canonical device key.
+    /// If a device reconnects within the debounce window, the pending
+    /// CTS is cancelled and the anti-theft alert is suppressed.
+    /// </summary>
+    private readonly Dictionary<
+        string,
+        PendingDisconnect>
+        _pendingDisconnects =
             new(StringComparer.OrdinalIgnoreCase);
 
     private readonly object _lifecycleLock = new();
@@ -35,9 +52,11 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
 
     public WindowsDeviceMonitorService(
         TelemetryService telemetryService,
+        IOptions<AgentOptions> options,
         ILogger<WindowsDeviceMonitorService> logger)
     {
         _telemetryService = telemetryService;
+        _options = options.Value;
         _logger = logger;
 
         _channel =
@@ -105,6 +124,8 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
         }
         finally
         {
+            CancelAllPendingDisconnects();
+
             ShutdownNativeNotifications();
 
             _logger.LogInformation(
@@ -196,6 +217,36 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
             WindowsDeviceEnumerator.GetCanonicalDeviceKey(
                 instanceId);
 
+        // ── Cancel pending debounce if device reconnected ────
+        if (_pendingDisconnects.TryGetValue(
+                key,
+                out PendingDisconnect? pending))
+        {
+            _pendingDisconnects.Remove(key);
+
+            try
+            {
+                await pending.Cts.CancelAsync();
+            }
+            catch
+            {
+                // Already cancelled or disposed.
+            }
+            finally
+            {
+                pending.Cts.Dispose();
+            }
+
+            _logger.LogInformation(
+                "USB flap resolved (reconnected within " +
+                "debounce window) | {DeviceName} | " +
+                "PID: {ProductId}",
+                device.DeviceName,
+                string.IsNullOrWhiteSpace(device.ProductId)
+                    ? "N/A"
+                    : device.ProductId);
+        }
+
         if (_presentDevices.ContainsKey(key))
         {
             return;
@@ -267,6 +318,132 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
             string.IsNullOrWhiteSpace(device.ProductId)
                 ? "N/A"
                 : device.ProductId);
+
+        // ── Start debounce timer for anti-theft alert ────────
+        if (!_options.EnableAntiTheftAlerts)
+        {
+            return;
+        }
+
+        // Cancel any pre-existing pending disconnect for
+        // this key (shouldn't happen, but defensive).
+        if (_pendingDisconnects.TryGetValue(
+                key,
+                out PendingDisconnect? existing))
+        {
+            _pendingDisconnects.Remove(key);
+
+            try
+            {
+                await existing.Cts.CancelAsync();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                existing.Cts.Dispose();
+            }
+        }
+
+        var cts = new CancellationTokenSource();
+
+        var pendingDisconnect = new PendingDisconnect
+        {
+            DeviceName = device.DeviceName,
+            ProductId = device.ProductId,
+            DisconnectedAt = DateTimeOffset.UtcNow,
+            Cts = cts
+        };
+
+        _pendingDisconnects[key] = pendingDisconnect;
+
+        // Fire-and-forget the debounce timer.
+        // The CTS lets HandleConnectedAsync cancel it.
+        _ = RunDebounceTimerAsync(
+            key,
+            pendingDisconnect,
+            cancellationToken);
+    }
+
+    private async Task RunDebounceTimerAsync(
+        string deviceKey,
+        PendingDisconnect pending,
+        CancellationToken serviceStopping)
+    {
+        try
+        {
+            using var linked =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    pending.Cts.Token,
+                    serviceStopping);
+
+            await Task.Delay(
+                TimeSpan.FromSeconds(
+                    _options.UsbDebounceWindowSeconds),
+                linked.Token);
+
+            // Timer expired → device did NOT reconnect.
+            // Remove from pending and emit anti-theft alert.
+            _pendingDisconnects.Remove(deviceKey);
+
+            var alert = new AlertPayload
+            {
+                Category = "anti_theft",
+                Type = "HARDWARE_FAILURE",
+                Severity = "CRITICAL",
+                Detail =
+                    $"Peripheral disconnected and not " +
+                    $"restored: {pending.DeviceName} " +
+                    $"(PID: {(string.IsNullOrWhiteSpace(pending.ProductId) ? "N/A" : pending.ProductId)}).",
+                OccurredAt = pending.DisconnectedAt
+            };
+
+            await _telemetryService.PublishAlertAsync(
+                alert,
+                serviceStopping);
+
+            _logger.LogWarning(
+                "Anti-theft alert: Peripheral not restored " +
+                "after {Window}s debounce | {DeviceName} | " +
+                "PID: {ProductId}",
+                _options.UsbDebounceWindowSeconds,
+                pending.DeviceName,
+                string.IsNullOrWhiteSpace(pending.ProductId)
+                    ? "N/A"
+                    : pending.ProductId);
+        }
+        catch (OperationCanceledException)
+        {
+            // Either the device reconnected (CTS cancelled)
+            // or the service is shutting down. Both are normal.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Error in USB debounce timer for " +
+                "device key {DeviceKey}.",
+                deviceKey);
+        }
+    }
+
+    private void CancelAllPendingDisconnects()
+    {
+        foreach (PendingDisconnect pending
+                 in _pendingDisconnects.Values)
+        {
+            try
+            {
+                pending.Cts.Cancel();
+                pending.Cts.Dispose();
+            }
+            catch
+            {
+            }
+        }
+
+        _pendingDisconnects.Clear();
     }
 
     private void AddPresentDevice(
@@ -517,6 +694,17 @@ public sealed class WindowsDeviceMonitorService : BackgroundService
 
         public string InstanceId { get; init; } =
             string.Empty;
+    }
+
+    private sealed class PendingDisconnect
+    {
+        public required string DeviceName { get; init; }
+
+        public required string ProductId { get; init; }
+
+        public required DateTimeOffset DisconnectedAt { get; init; }
+
+        public required CancellationTokenSource Cts { get; init; }
     }
 
     private enum CMNotifyFilterType
