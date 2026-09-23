@@ -350,6 +350,8 @@ For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOC
 | Helper missing while locked for 30 s | Service raises a `security_violation` alert (once per outage, rate-limited) |
 | Helper missing (any state) | Service relaunches it every 30 s via `InteractiveProcessLauncher`, when running as a service and `LockUiExecutablePath` is set |
 | Keep-alive loop per connection | Cancelled when that connection ends (the old code leaked one loop per reconnect) |
+| Unexpected error in the pipe client | Logged via `Trace`; the client keeps reconnecting (only the documented I/O errors used to be caught, so any other error ended the loop and left the LockUI on "Service unavailable" for good) |
+| Service gone while locked (development) | Debug builds only: **Ctrl+Alt+Shift+F12**, caught by the keyboard hook, closes the LockUI. Compiled out of Release builds |
 | Unhandled UI exception | Logged via `Trace`; the overlay keeps running |
 
 ---
@@ -368,6 +370,7 @@ For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOC
 - [x] Keyboard hook for Win, Alt-Tab, Alt-Esc, Alt-F4, Ctrl-Esc, Ctrl-Shift-Esc
 - [x] Task Manager disabled by the service in the console user's hive (the gamer cannot write that policy)
 - [x] Debug-only windowed test mode; mock auto-relock for hands-free kiosk tests
+- [x] Debug-only emergency exit (Ctrl+Alt+Shift+F12) for a kiosk overlay whose service stopped
 - [x] LockUI single instance; locks itself 15 s after losing the service
 - [x] Service watchdog: alert and relaunch when the helper is missing
 - [x] `dotnet build` succeeds with 0 warnings (warnings as errors) across all projects
