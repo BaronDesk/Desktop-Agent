@@ -31,15 +31,24 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _loginTimeoutTimer;
     private readonly DispatcherTimer _rateLimitTimer;
 
+    private readonly bool _windowedTestMode;
+
     private bool _isLocked = true;
     private bool _pipeConnected;
     private bool _serverOnline;
     private bool _loginPending;
     private bool _rateLimited;
 
-    public MainWindow()
+    /// <param name="windowedTestMode">Debug-only test mode: a normal window, no keyboard hook, no Task Manager policy.</param>
+    public MainWindow(bool windowedTestMode)
     {
+        _windowedTestMode = windowedTestMode;
         InitializeComponent();
+
+        if (windowedTestMode)
+        {
+            ConfigureWindowedTestMode();
+        }
 
         _failClosedTimer = new DispatcherTimer { Interval = FailClosedAfterDisconnect };
         _failClosedTimer.Tick += OnFailClosedTimerTick;
@@ -114,14 +123,24 @@ public partial class MainWindow : Window
 
     private void ShowLockScreen(Guid? correlationId)
     {
-        ApplyVirtualScreenBounds();
-        Show();
-        Topmost = true;
-        Activate();
-
-        _keyboardHook.Install();
-        TaskManagerPolicy.SetDisabled(true);
         _isLocked = true;
+
+        if (_windowedTestMode)
+        {
+            ShowTestModeState();
+            Show();
+            Activate();
+        }
+        else
+        {
+            ApplyVirtualScreenBounds();
+            Show();
+            Topmost = true;
+            Activate();
+
+            // Task Manager is disabled by the service (LocalSystem): the gamer cannot write that policy.
+            _keyboardHook.Install();
+        }
 
         PinBox.Password = string.Empty;
         PinBox.Focus();
@@ -132,16 +151,46 @@ public partial class MainWindow : Window
 
     private void HideLockScreen(Guid? correlationId)
     {
-        _keyboardHook.Uninstall();
-        TaskManagerPolicy.SetDisabled(false);
         _isLocked = false;
-
         EndPendingLogin();
         PinBox.Password = string.Empty;
         SetStatus(string.Empty, Brushes.Gray);
-        Hide();
+
+        if (_windowedTestMode)
+        {
+            // Stays visible so the tester can watch the state; the real lock screen hides here.
+            ShowTestModeState();
+            UpdateAvailability();
+        }
+        else
+        {
+            _keyboardHook.Uninstall();
+            Hide();
+        }
 
         _ = _client.SendAsync(new PipeMessage { Kind = PipeMessageKind.LockHidden, CorrelationId = correlationId });
+    }
+
+    private void ConfigureWindowedTestMode()
+    {
+        WindowStyle = WindowStyle.SingleBorderWindow;
+        ResizeMode = ResizeMode.CanMinimize;
+        Topmost = false;
+        ShowInTaskbar = true;
+        Width = 560;
+        Height = 640;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        TestModeBanner.Visibility = Visibility.Visible;
+        ShowTestModeState();
+    }
+
+    private void ShowTestModeState()
+    {
+        Title = $"BaronDesk LockUI — TEST MODE — {(_isLocked ? "LOCKED" : "UNLOCKED")}";
+        TestModeBanner.Text = _isLocked
+            ? "WINDOWED TEST MODE · state: LOCKED\n(no keyboard blocking; the real lock screen covers every monitor)"
+            : "WINDOWED TEST MODE · state: UNLOCKED\n(the real lock screen is hidden now; the gamer is playing)";
+        TestModeBanner.Foreground = _isLocked ? Brushes.OrangeRed : Brushes.LightGreen;
     }
 
     private void OnUnlockClick(object sender, RoutedEventArgs e) => _ = SubmitPinAsync();
@@ -245,8 +294,8 @@ public partial class MainWindow : Window
 
     private void UpdateAvailability()
     {
-        PinBox.IsEnabled = IsServiceAvailable && !_rateLimited;
-        UnlockButton.IsEnabled = IsServiceAvailable && !_rateLimited && !_loginPending;
+        PinBox.IsEnabled = _isLocked && IsServiceAvailable && !_rateLimited;
+        UnlockButton.IsEnabled = _isLocked && IsServiceAvailable && !_rateLimited && !_loginPending;
 
         if (!IsServiceAvailable)
         {
@@ -276,7 +325,7 @@ public partial class MainWindow : Window
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
         Dispatcher.BeginInvoke(() =>
         {
-            if (_isLocked)
+            if (_isLocked && !_windowedTestMode)
             {
                 ApplyVirtualScreenBounds();
             }
@@ -284,7 +333,7 @@ public partial class MainWindow : Window
 
     private void OnDeactivated(object? sender, EventArgs e)
     {
-        if (_isLocked)
+        if (_isLocked && !_windowedTestMode)
         {
             Topmost = true;
             Activate();
@@ -293,7 +342,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (_isLocked)
+        if (_isLocked && !_windowedTestMode)
         {
             e.Cancel = true;
             return;
@@ -307,7 +356,6 @@ public partial class MainWindow : Window
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _shutdown.Cancel();
         _keyboardHook.Dispose();
-        TaskManagerPolicy.SetDisabled(false);
         base.OnClosed(e);
     }
 }

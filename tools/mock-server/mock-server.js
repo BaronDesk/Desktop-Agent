@@ -6,6 +6,9 @@
 // then copy the printed SHA-256 fingerprint into Agent:PinnedCertificateHash.
 //
 // Login relay: typing PIN 1234 on the lock screen is accepted (login_result + UNLOCK); anything else is rejected.
+//
+// Hands-free lock screen testing: MOCK_AUTO_RELOCK_SECONDS=20 node mock-server.js
+// sends LOCK automatically 20 s after every acknowledged UNLOCK (the fullscreen lock screen covers the terminal).
 
 const fs = require('fs');
 const http = require('http');
@@ -19,9 +22,21 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const ACCEPTED_PIN = '1234';
 const LEASE_SECONDS = 60;
 
+const AUTO_RELOCK_SECONDS = Number(process.env.MOCK_AUTO_RELOCK_SECONDS) || 0;
+
 let activeSocket = null;
 let serverSequence = 100;
 let currentSessionId = null;
+const pendingUnlockIds = new Set();
+
+function sendUnlock() {
+    currentSessionId = crypto.randomUUID();
+    console.log(`\nUnlocking station with SessionId=${currentSessionId}`);
+    const id = sendEnvelope('UNLOCK', { sessionId: currentSessionId, leaseSeconds: LEASE_SECONDS });
+    if (id) {
+        pendingUnlockIds.add(id);
+    }
+}
 
 // -------------------------------------------------------------
 // HTTP(S) Server & WebSocket Upgrade (RFC 6455)
@@ -208,6 +223,8 @@ function sendEnvelope(type, payload, customSeq = null, customTs = null) {
     if (payload) {
         console.log('Payload:', JSON.stringify(payload));
     }
+
+    return envelope.id;
 }
 
 // -------------------------------------------------------------
@@ -238,8 +255,7 @@ function handleTextMessage(text, socket) {
                 reason: accepted ? null : 'Incorrect PIN. Please try again.'
             });
             if (accepted) {
-                currentSessionId = crypto.randomUUID();
-                sendEnvelope('UNLOCK', { sessionId: currentSessionId, leaseSeconds: LEASE_SECONDS });
+                sendUnlock();
             }
         } else if (type === 'state_report') {
             console.log('\x1b[36m[STATE_REPORT RECEIVED]\x1b[0m Current Station State:');
@@ -257,6 +273,10 @@ function handleTextMessage(text, socket) {
             });
         } else if (type === 'command_ack') {
             console.log(`\x1b[32m[COMMAND_ACK]\x1b[0m Command \x1b[1m${env.payload?.commandId}\x1b[0m executed successfully!`);
+            if (pendingUnlockIds.delete(env.payload?.commandId) && AUTO_RELOCK_SECONDS > 0) {
+                console.log(`\x1b[33m[AUTO-RELOCK]\x1b[0m Sending LOCK in ${AUTO_RELOCK_SECONDS}s...`);
+                setTimeout(() => sendEnvelope('LOCK', { reason: 'auto_relock_test' }), AUTO_RELOCK_SECONDS * 1000);
+            }
         } else if (type === 'command_nack') {
             console.log(`\x1b[31m[COMMAND_NACK]\x1b[0m Command \x1b[1m${env.payload?.commandId}\x1b[0m rejected!`);
             console.log(`Code: ${env.payload?.code}, Reason: ${env.payload?.reason}`);
@@ -316,9 +336,7 @@ rl.on('line', (line) => {
             sendEnvelope('LOCK', null);
             break;
         case '2':
-            currentSessionId = crypto.randomUUID();
-            console.log(`\nUnlocking station with SessionId=${currentSessionId}`);
-            sendEnvelope('UNLOCK', { sessionId: currentSessionId, leaseSeconds: LEASE_SECONDS });
+            sendUnlock();
             break;
         case '3':
             sendEnvelope('LAUNCH_GAME', { gameId: 'notepad' });
@@ -377,6 +395,9 @@ rl.on('line', (line) => {
 
 server.listen(PORT, '127.0.0.1', () => {
     console.log(`\x1b[32m[READY]\x1b[0m BaronDesk Mock WebSocket Server listening on ${useTls ? 'wss' : 'ws'}://127.0.0.1:${PORT}${WS_PATH}`);
+    if (AUTO_RELOCK_SECONDS > 0) {
+        console.log(`\x1b[33m[AUTO-RELOCK]\x1b[0m On: LOCK is sent ${AUTO_RELOCK_SECONDS}s after every acknowledged UNLOCK.`);
+    }
     console.log('Waiting for BaronDesk Agent to connect...');
     printMenu();
 });

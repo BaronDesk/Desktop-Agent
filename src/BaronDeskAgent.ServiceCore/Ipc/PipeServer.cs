@@ -59,6 +59,7 @@ public sealed class PipeServer : BackgroundService, ILockScreen
     // What the overlay should show. Starts locked, so a freshly connected helper is told to lock.
     private volatile bool _desiredLocked = true;
 
+    private int _taskManagerPolicyWarningLogged;
     private long? _helperMissingSince;
     private bool _helperMissingAlerted;
     private long? _lastRelaunchAttempt;
@@ -83,15 +84,17 @@ public sealed class PipeServer : BackgroundService, ILockScreen
         _logger = logger;
     }
 
-    public Task<bool> ShowAsync(CancellationToken cancellationToken)
+    public Task<OverlayResult> ShowAsync(CancellationToken cancellationToken)
     {
         _desiredLocked = true;
+        ApplyTaskManagerPolicy(locked: true);
         return SendAndConfirmAsync(PipeMessageKind.ShowLock, cancellationToken);
     }
 
-    public Task<bool> HideAsync(CancellationToken cancellationToken)
+    public Task<OverlayResult> HideAsync(CancellationToken cancellationToken)
     {
         _desiredLocked = false;
+        ApplyTaskManagerPolicy(locked: false);
         return SendAndConfirmAsync(PipeMessageKind.HideLock, cancellationToken);
     }
 
@@ -182,6 +185,8 @@ public sealed class PipeServer : BackgroundService, ILockScreen
 
         try
         {
+            // A helper connects after every sign-in: re-apply the policy to the (possibly new) console user.
+            ApplyTaskManagerPolicy(_desiredLocked);
             await TrySendAsync(new PipeMessage { Kind = _desiredLocked ? PipeMessageKind.ShowLock : PipeMessageKind.HideLock }, cancellationToken);
             await TrySendAsync(new PipeMessage { Kind = PipeMessageKind.ServerStatus, ServerOnline = _connection.IsReady }, cancellationToken);
 
@@ -265,12 +270,12 @@ public sealed class PipeServer : BackgroundService, ILockScreen
         }
     }
 
-    private async Task<bool> SendAndConfirmAsync(PipeMessageKind kind, CancellationToken cancellationToken)
+    private async Task<OverlayResult> SendAndConfirmAsync(PipeMessageKind kind, CancellationToken cancellationToken)
     {
         if (!_clientConnected)
         {
-            _logger.LogWarning("Cannot {Kind}: the LockUI helper is not connected.", kind);
-            return false;
+            _logger.LogWarning("Cannot {Kind}: the LockUI helper is not connected (is BaronDesk.LockUI running?).", kind);
+            return OverlayResult.HelperNotConnected;
         }
 
         var correlationId = Guid.NewGuid();
@@ -281,15 +286,17 @@ public sealed class PipeServer : BackgroundService, ILockScreen
         {
             if (!await TrySendAsync(new PipeMessage { Kind = kind, CorrelationId = correlationId }, cancellationToken))
             {
-                return false;
+                return OverlayResult.HelperNotConnected;
             }
 
-            return await confirmation.Task.WaitAsync(ConfirmationTimeout, _timeProvider, cancellationToken);
+            return await confirmation.Task.WaitAsync(ConfirmationTimeout, _timeProvider, cancellationToken)
+                ? OverlayResult.Confirmed
+                : OverlayResult.NotConfirmed;
         }
         catch (TimeoutException)
         {
             _logger.LogWarning("The LockUI helper did not confirm {Kind} within {Timeout}s.", kind, ConfirmationTimeout.TotalSeconds);
-            return false;
+            return OverlayResult.NotConfirmed;
         }
         finally
         {
@@ -340,6 +347,22 @@ public sealed class PipeServer : BackgroundService, ILockScreen
         finally
         {
             _sendLock.Release();
+        }
+    }
+
+    private void ApplyTaskManagerPolicy(bool locked)
+    {
+        if (TaskManagerPolicy.TryApply(disabled: locked, out var error))
+        {
+            return;
+        }
+
+        // Expected when developing (the agent runs as a standard user); logged once to avoid noise.
+        if (Interlocked.Exchange(ref _taskManagerPolicyWarningLogged, 1) == 0)
+        {
+            _logger.LogWarning(
+                "Task Manager policy could not be applied for the console user ({Error}). The service must run as LocalSystem or an administrator.",
+                error);
         }
     }
 

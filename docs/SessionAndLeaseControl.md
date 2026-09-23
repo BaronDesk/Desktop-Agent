@@ -91,7 +91,7 @@ public sealed class StationController : IDisposable
     public StationSnapshot GetSnapshot();   // Locked, SessionId, RunningGameId, LeaseExpiresAt
 
     public Task StartSessionAsync(Guid sessionId, TimeSpan? leaseDuration, CancellationToken ct);  // UNLOCK
-    public Task<bool> LockAsync(CancellationToken ct);                                             // LOCK
+    public Task<OverlayResult> LockAsync(CancellationToken ct);                                    // LOCK
     public Task<EndSessionResult> EndSessionAsync(Guid? expectedSessionId, string reason, CancellationToken ct);
     public void RenewLease(TimeSpan? duration);                                                    // heartbeat_ack
     public Task PrepareForShutdownAsync();                                                         // SHUTDOWN
@@ -198,8 +198,8 @@ Other fail-closed rules
 
 ```csharp
 public bool IsLocked { get; }                               // starts true
-public Task<bool> LockAsync(CancellationToken ct);          // flag set BEFORE any await; true = overlay confirmed
-public Task<bool> UnlockAsync(CancellationToken ct);
+public Task<OverlayResult> LockAsync(CancellationToken ct);   // flag set BEFORE any await
+public Task<OverlayResult> UnlockAsync(CancellationToken ct); // Confirmed | HelperNotConnected | NotConfirmed
 ```
 
 `LockAsync` always re-sends `ShowLock`, which also heals a LockUI that restarted.
@@ -359,7 +359,7 @@ services.AddHostedService<HeartbeatWorker>();
 | `Heartbeat_renewals_keep_the_station_unlocked` | Renewals work |
 | `A_renewal_reporting_an_expired_lease_is_not_honoured` | Expired terms never renew |
 | `Lock_revokes_the_lease_but_keeps_the_session_bound` | LOCK semantics |
-| `Lock_reports_failure_when_the_overlay_is_not_confirmed` | Honest `EXEC_FAILED` |
+| `Lock_reports_why_the_overlay_is_not_confirmed_but_still_locks` | Locked either way; `HelperNotConnected` / `NotConfirmed` reported for an honest `EXEC_FAILED` |
 | `End_session_for_another_session_is_ignored` | Stale END_SESSION is a no-op |
 | `A_new_unlock_replaces_the_previous_session` | Session replacement |
 | `Walks_through_valid_grace_and_expired`, `Caps_any_lease_at_the_policy_duration`, `Duration_uses_server_clock_values_only` | Lease maths |

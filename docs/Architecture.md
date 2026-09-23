@@ -32,15 +32,15 @@ Desktop-Agent
 │   │   ├── Policy                       StationPolicy, PolicyStore, PolicyRepository
 │   │   ├── Ipc                          PipeServer, PipeClientVerifier
 │   │   ├── Persistence                  AgentDatabase, migrations, secure data directory
-│   │   ├── Platform                     Windows session helpers
+│   │   ├── Platform                     Windows session helpers, Task Manager policy
 │   │   └── Program.cs                   composition root
 │   │
 │   └── BaronDesk.LockUI                 WPF lock overlay (user session)
 │       ├── Ipc                          PipeClient
-│       └── Kiosk                        KeyboardHook, TaskManagerPolicy
+│       └── Kiosk                        KeyboardHook
 │
 ├── tests
-│   └── BaronDeskAgent.ServiceCore.Tests (75 unit / integration tests)
+│   └── BaronDeskAgent.ServiceCore.Tests (77 unit / integration tests)
 │
 ├── tools
 │   └── mock-server                      zero-dependency Node.js mock of /agent-ws
@@ -192,7 +192,7 @@ Everything the backend tunes at runtime (cadences, lease, thresholds, debounce, 
 
 ```powershell
 dotnet build BaronDeskAgent.slnx          # 0 warnings (warnings are errors)
-dotnet test BaronDeskAgent.slnx           # 75 tests
+dotnet test BaronDeskAgent.slnx           # 77 tests
 
 node tools/mock-server/mock-server.js
 $env:DOTNET_ENVIRONMENT = "Development"; dotnet run --project src/BaronDeskAgent.ServiceCore

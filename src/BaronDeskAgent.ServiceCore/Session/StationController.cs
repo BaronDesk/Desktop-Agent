@@ -5,15 +5,13 @@ namespace BaronDeskAgent.ServiceCore.Session;
 
 public sealed record StationSnapshot(bool Locked, Guid? SessionId, string? RunningGameId, DateTimeOffset? LeaseExpiresAt);
 
-public enum EndSessionResult
+/// <param name="StaleSessionIgnored">The command named a different session than the active one (late redelivery); nothing changed.</param>
+/// <param name="Overlay">Whether the lock overlay was confirmed after ending the session.</param>
+public readonly record struct EndSessionResult(bool StaleSessionIgnored, OverlayResult Overlay)
 {
-    Ended,
+    public static EndSessionResult Stale { get; } = new(true, OverlayResult.Confirmed);
 
-    /// <summary>The command named a different session than the active one (late redelivery); nothing changed.</summary>
-    StaleSessionIgnored,
-
-    /// <summary>The session ended and the station is locked, but the helper did not confirm the overlay.</summary>
-    LockNotConfirmed
+    public static EndSessionResult Ended(OverlayResult overlay) => new(false, overlay);
 }
 
 /// <summary>
@@ -102,12 +100,10 @@ public sealed class StationController : IDisposable
                     "Ignoring END_SESSION for session {Expected}: the active session is {Active}.",
                     expected,
                     active);
-                return EndSessionResult.StaleSessionIgnored;
+                return EndSessionResult.Stale;
             }
 
-            return await EndAndLockCoreAsync(reason)
-                ? EndSessionResult.Ended
-                : EndSessionResult.LockNotConfirmed;
+            return EndSessionResult.Ended(await EndAndLockCoreAsync(reason));
         }
         finally
         {
@@ -117,22 +113,22 @@ public sealed class StationController : IDisposable
 
     /// <summary>
     /// LOCK (e.g. billing run-out): locks and revokes the lease. The session stays bound so the backend can
-    /// UNLOCK again after a top-up. Returns true when the overlay was confirmed.
+    /// UNLOCK again after a top-up. Returns whether the overlay was confirmed.
     /// </summary>
-    public async Task<bool> LockAsync(CancellationToken cancellationToken)
+    public async Task<OverlayResult> LockAsync(CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken);
         try
         {
             _leaseManager.Revoke();
-            var shown = await _lockService.LockAsync(CancellationToken.None);
+            var overlay = await _lockService.LockAsync(CancellationToken.None);
 
             if (_policyStore.CurrentPolicy.StopGameOnLock)
             {
                 await StopGameSafelyAsync();
             }
 
-            return shown;
+            return overlay;
         }
         finally
         {
@@ -223,13 +219,13 @@ public sealed class StationController : IDisposable
     private bool IsLeaseUsable() => _leaseManager.GetStatus() is LeaseStatus.Valid or LeaseStatus.InGrace;
 
     /// <summary>Caller holds the gate. Locks first so the screen is covered immediately, then cleans up.</summary>
-    private async Task<bool> EndAndLockCoreAsync(string reason)
+    private async Task<OverlayResult> EndAndLockCoreAsync(string reason)
     {
         _leaseManager.Revoke();
-        var shown = await _lockService.LockAsync(CancellationToken.None);
+        var overlay = await _lockService.LockAsync(CancellationToken.None);
         await StopGameSafelyAsync();
         _sessionService.End(reason);
-        return shown;
+        return overlay;
     }
 
     private async Task StopGameSafelyAsync()

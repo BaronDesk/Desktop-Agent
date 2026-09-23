@@ -33,8 +33,9 @@ public sealed class LockCommandHandler : ICommandHandler
             _logger.LogWarning("LOCK payload ignored ({Error}); locking anyway.", error);
         }
 
-        return await _station.LockAsync(cancellationToken)
+        var overlay = await _station.LockAsync(cancellationToken);
+        return overlay == OverlayResult.Confirmed
             ? CommandResult.Success()
-            : CommandResult.Failed("Station state is locked, but the lock screen did not confirm it is visible.");
+            : CommandResult.Failed(overlay.DescribeLockFailure());
     }
 }

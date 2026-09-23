@@ -17,7 +17,8 @@ This document describes the implementation and architecture of the WPF lock scre
 │       ├── ACL: service account + console user only (no CreateNewInstance)      │
 │       ├── FirstPipeInstance (squatting detection)                               │
 │       ├── client verification (session id, optional image path)                │
-│       └── watchdog: alert + relaunch when the helper is missing                 │
+│       ├── watchdog: alert + relaunch when the helper is missing                 │
+│       └── Task Manager policy for the console user (written as LocalSystem)     │
 └────────────────────────────────────────┬────────────────────────────────────────┘
                                          │
                    Named-Pipe IPC (newline-delimited JSON, ≤ 4 KiB/message)
@@ -26,9 +27,9 @@ This document describes the implementation and architecture of the WPF lock scre
 │                       Session 1+ (Interactive User Desktop)                      │
 │                                                                                 │
 │   BaronDesk.LockUI (single instance per session)                                 │
-│   ├── MainWindow (borderless topmost window over the whole virtual screen)      │
+│   ├── MainWindow (borderless topmost window over the whole virtual screen,      │
+│   │              or a normal window in the Debug-only --windowed test mode)    │
 │   ├── Kiosk/KeyboardHook (blocks Win, Alt-Tab, Alt-Esc, Alt-F4, Ctrl-Esc, …)     │
-│   ├── Kiosk/TaskManagerPolicy (DisableTaskMgr while locked)                       │
 │   └── Ipc/PipeClient (verifies the server, auto-reconnects, keep-alive)          │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -60,13 +61,14 @@ Desktop-Agent
     │   ├── Ipc
     │   │   └── PipeClient.cs
     │   └── Kiosk
-    │       ├── KeyboardHook.cs
-    │       └── TaskManagerPolicy.cs
+    │       └── KeyboardHook.cs
     │
     └── BaronDeskAgent.ServiceCore
         ├── Ipc
         │   ├── PipeServer.cs
         │   └── PipeClientVerifier.cs
+        ├── Platform
+        │   └── TaskManagerPolicy.cs  (DisableTaskMgr in the console user's hive)
         └── Session
             ├── ILockScreen.cs
             ├── LockService.cs
@@ -167,18 +169,22 @@ In Release builds the client checks, with `GetNamedPipeServerProcessId` + `Proce
 LockService.LockAsync()
       │
       ▼
-PipeServer.ShowAsync()
+PipeServer.ShowAsync()  →  OverlayResult
       │
-      ├── helper not connected ──────────────────────────► false
+      ├── helper not connected ──────────────────────────► HelperNotConnected
       │
       ├── send ShowLock { correlationId }
       │
-      ├── LockShown { same correlationId } within 5 s ────► true
+      ├── LockShown { same correlationId } within 5 s ────► Confirmed
       │
-      └── timeout / disconnect ───────────────────────────► false
+      └── timeout / disconnect ───────────────────────────► NotConfirmed
 ```
 
-- `LOCK` and `END_SESSION` are acknowledged to the backend only when this returns `true`, and nacked `EXEC_FAILED` otherwise. The old code acked even when no helper was running.
+- The station is locked in every case (the flag flips first). Only the **acknowledgement** depends on the result.
+- `LOCK` and `END_SESSION` are acked only for `Confirmed`. Otherwise they are nacked `EXEC_FAILED` with a reason that names the cause:
+  - `HelperNotConnected`: "The station is now locked, but the lock screen app (LockUI) is not running or not connected, so nothing covers the screen."
+  - `NotConfirmed`: "The station is now locked, but the lock screen app did not confirm that the overlay is visible."
+- The old code acked even when no helper was running.
 - The service remembers the **desired** state (starts locked) and replays it to every newly connected helper, together with the current `ServerStatus`.
 - The read loop never blocks: logins are relayed in the background, so confirmations keep flowing while the backend decides.
 
@@ -278,9 +284,21 @@ The callback delegate is kept in a field (never garbage collected), and installa
 
 **Honest limits:** `Ctrl + Alt + Del` (secure attention sequence) and `Win + L` cannot be intercepted from user mode. Windows silently removes a low-level hook whose callback is too slow, so the UI thread must stay responsive (pipe events use `Dispatcher.BeginInvoke`, never `Invoke`).
 
-### Task Manager Policy
+### Task Manager Policy (set by the service)
 
-`Kiosk/TaskManagerPolicy` sets `HKCU\…\Policies\System\DisableTaskMgr = 1` while locked and removes it on unlock. If the helper is killed while locked the value stays set, but the helper always starts locked and clears it on the next unlock.
+Standard users only have **read** access to their own `HKCU\Software\Microsoft\Windows\CurrentVersion\Policies` key; only SYSTEM and Administrators can write it. The LockUI runs as the gamer, so it cannot disable Task Manager itself. The first implementation tried to, and its write always failed silently.
+
+`Platform/TaskManagerPolicy` in the **service** (LocalSystem) writes the value into the console user's hive:
+
+```text
+HKEY_USERS\<console user SID>\Software\Microsoft\Windows\CurrentVersion\Policies\System
+    DisableTaskMgr = 1        (ShowLock, and on every helper connection while locked)
+    (value removed)           (HideLock)
+```
+
+- Applied in `PipeServer.ShowAsync` / `HideAsync`, and re-applied whenever a helper connects (a new sign-in means a new user hive).
+- If it cannot be written (agent running as a standard user during development, nobody signed in), one warning is logged: `Task Manager policy could not be applied for the console user (…)`.
+- If the service stops while locked the value stays set until the next unlock. The station is locked in that case anyway.
 
 ### Window Close Prevention
 
@@ -298,6 +316,24 @@ protected override void OnClosing(CancelEventArgs e)
 ```
 
 The old `RegisterHotKey(MOD_WIN, 0)` call was removed: it registered nothing.
+
+### Windowed Test Mode (Debug Builds Only)
+
+```powershell
+dotnet run --project src/BaronDesk.LockUI -- --windowed
+```
+
+| | Kiosk mode (default) | Windowed test mode |
+|---|---|---|
+| Window | Borderless, topmost, whole virtual screen | Normal 560×640 window, title `BaronDesk LockUI — TEST MODE — LOCKED/UNLOCKED` |
+| Keyboard hook | Installed while locked | Not installed |
+| When unlocked | Hidden | Stays visible, banner shows **UNLOCKED** |
+| Close button | Refused while locked | Allowed |
+| IPC, PIN relay, confirmations, fail-closed | Same | Same |
+
+The flag is compiled out of **Release** builds (`#if DEBUG`). Otherwise a gamer could start a windowed instance first, take the single-instance slot, and receive the service's "lock" in a window they can move away.
+
+For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOCK` automatically after every acknowledged `UNLOCK`, so the lock/unlock cycle can be tested without typing in the covered terminal (see `README.md`, step 6B).
 
 ---
 
@@ -330,6 +366,8 @@ The old `RegisterHotKey(MOD_WIN, 0)` call was removed: it registered nothing.
 - [x] Offline login refused ("no new sessions offline"); 5 failures → 30 s lockout
 - [x] Fullscreen topmost overlay over the virtual screen, re-sized on display changes
 - [x] Keyboard hook for Win, Alt-Tab, Alt-Esc, Alt-F4, Ctrl-Esc, Ctrl-Shift-Esc
+- [x] Task Manager disabled by the service in the console user's hive (the gamer cannot write that policy)
+- [x] Debug-only windowed test mode; mock auto-relock for hands-free kiosk tests
 - [x] LockUI single instance; locks itself 15 s after losing the service
 - [x] Service watchdog: alert and relaunch when the helper is missing
 - [x] `dotnet build` succeeds with 0 warnings (warnings as errors) across all projects

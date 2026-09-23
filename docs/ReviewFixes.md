@@ -73,6 +73,8 @@ Docs/                                          tools/mock-server/mock-server.js
 - LibreHardwareMonitor sub-hardware (fan chips) was never updated.
 - The pipe server blocked its read loop while waiting for the login verdict.
 - A heartbeat now follows every reconnect immediately (found during the end-to-end run).
+- Task Manager was never actually disabled: standard users can only read their own `HKCU\Software\Microsoft\Windows\CurrentVersion\Policies` key, so the LockUI's write always failed silently. The service (LocalSystem) now writes `DisableTaskMgr` into the console user's hive.
+- `LOCK` / `END_SESSION` nacks now say *why* the overlay was not confirmed (`HelperNotConnected` vs `NotConfirmed`); the old text read like "already locked".
 
 ---
 
@@ -82,8 +84,9 @@ Docs/                                          tools/mock-server/mock-server.js
 |---|---|
 | DPAPI station credential store (`LocalMachine`, protected file ACL) and `--set-station-token` provisioning | CredentialStore |
 | Plain-text `StationToken` rejected outside Development | CredentialStore |
-| 75 unit / integration tests (`tests/BaronDeskAgent.ServiceCore.Tests`) | each document's testing section |
-| Mock server: TLS mode, lease terms, login relay, drift/malformed/replay scenarios | WebSocketConnection §11 |
+| 77 unit / integration tests (`tests/BaronDeskAgent.ServiceCore.Tests`) | each document's testing section |
+| Mock server: TLS mode, lease terms, login relay, drift/malformed/replay scenarios, `MOCK_AUTO_RELOCK_SECONDS` | WebSocketConnection §11 |
+| LockUI windowed test mode (`--windowed`, Debug builds only) | LockUIAndIPC |
 
 ---
 
@@ -101,6 +104,6 @@ Docs/                                          tools/mock-server/mock-server.js
 ## Current Status
 
 - [x] All critical, high and medium findings fixed
-- [x] `dotnet build` with 0 warnings (warnings as errors), 75 tests passing
+- [x] `dotnet build` with 0 warnings (warnings as errors), 77 tests passing
 - [x] End-to-end run against the mock server (handshake, commands, drift, replay, malformed frames, reconnect)
 - [ ] OPEN contract items above confirmed with the backend

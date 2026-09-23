@@ -28,20 +28,20 @@ internal sealed class FakePolicyStore(StationPolicy? policy = null) : IPolicySto
 
 internal sealed class FakeLockScreen : ILockScreen
 {
-    public bool Confirms { get; set; } = true;
+    public OverlayResult Result { get; set; } = OverlayResult.Confirmed;
 
     public bool IsShown { get; private set; } = true;
 
-    public Task<bool> ShowAsync(CancellationToken cancellationToken)
+    public Task<OverlayResult> ShowAsync(CancellationToken cancellationToken)
     {
         IsShown = true;
-        return Task.FromResult(Confirms);
+        return Task.FromResult(Result);
     }
 
-    public Task<bool> HideAsync(CancellationToken cancellationToken)
+    public Task<OverlayResult> HideAsync(CancellationToken cancellationToken)
     {
         IsShown = false;
-        return Task.FromResult(Confirms);
+        return Task.FromResult(Result);
     }
 }
 

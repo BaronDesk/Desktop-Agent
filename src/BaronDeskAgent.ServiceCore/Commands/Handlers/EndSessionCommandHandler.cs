@@ -40,10 +40,9 @@ public sealed class EndSessionCommandHandler : ICommandHandler
             _logger.LogWarning("END_SESSION payload ignored ({Error}); ending the active session anyway.", error);
         }
 
-        return await _station.EndSessionAsync(sessionId, reason, cancellationToken) switch
-        {
-            EndSessionResult.Ended or EndSessionResult.StaleSessionIgnored => CommandResult.Success(),
-            _ => CommandResult.Failed("Session ended and station state is locked, but the lock screen did not confirm it is visible.")
-        };
+        var result = await _station.EndSessionAsync(sessionId, reason, cancellationToken);
+        return result.StaleSessionIgnored || result.Overlay == OverlayResult.Confirmed
+            ? CommandResult.Success()
+            : CommandResult.Failed($"Session ended. {result.Overlay.DescribeLockFailure()}");
     }
 }

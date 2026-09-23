@@ -23,8 +23,8 @@ public sealed class LockService
     /// Locks the station. The state flips before anything is awaited, so the station is locked even if the
     /// overlay call is cancelled. Always re-sends the overlay command, which heals a helper that restarted.
     /// </summary>
-    /// <returns>True when the helper confirmed the overlay is visible.</returns>
-    public async Task<bool> LockAsync(CancellationToken cancellationToken)
+    /// <returns>Whether the helper confirmed the overlay is visible.</returns>
+    public async Task<OverlayResult> LockAsync(CancellationToken cancellationToken)
     {
         _isLocked = true;
 
@@ -32,9 +32,9 @@ public sealed class LockService
         try
         {
             _isLocked = true;
-            var shown = await _lockScreen.ShowAsync(cancellationToken);
-            _logger.LogInformation("Station LOCKED (overlay confirmed: {Confirmed}).", shown);
-            return shown;
+            var overlay = await _lockScreen.ShowAsync(cancellationToken);
+            _logger.LogInformation("Station LOCKED (overlay: {Overlay}).", overlay);
+            return overlay;
         }
         finally
         {
@@ -42,16 +42,16 @@ public sealed class LockService
         }
     }
 
-    /// <returns>True when the helper confirmed the overlay is hidden.</returns>
-    public async Task<bool> UnlockAsync(CancellationToken cancellationToken)
+    /// <returns>Whether the helper confirmed the overlay is hidden.</returns>
+    public async Task<OverlayResult> UnlockAsync(CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken);
         try
         {
             _isLocked = false;
-            var hidden = await _lockScreen.HideAsync(cancellationToken);
-            _logger.LogInformation("Station UNLOCKED (overlay confirmed: {Confirmed}).", hidden);
-            return hidden;
+            var overlay = await _lockScreen.HideAsync(cancellationToken);
+            _logger.LogInformation("Station UNLOCKED (overlay: {Overlay}).", overlay);
+            return overlay;
         }
         finally
         {

@@ -29,8 +29,25 @@ public partial class App : Application
         };
 
         base.OnStartup(e);
-        MainWindow = new MainWindow();
+        MainWindow = new MainWindow(IsWindowedTestMode(e.Args));
         MainWindow.Show();
+    }
+
+    /// <summary>
+    /// <c>--windowed</c>: run as a normal window, without the keyboard hook or the Task Manager policy, so the
+    /// IPC and login flows can be tested while the terminals stay usable.
+    /// </summary>
+    /// <remarks>
+    /// Debug builds only. In a Release build a gamer could otherwise start a windowed instance first, take the
+    /// single-instance slot, and receive the service's "lock" commands in a window they can simply move away.
+    /// </remarks>
+    private static bool IsWindowedTestMode(string[] args)
+    {
+#if DEBUG
+        return args.Contains("--windowed", StringComparer.OrdinalIgnoreCase);
+#else
+        return false;
+#endif
     }
 
     protected override void OnExit(ExitEventArgs e)

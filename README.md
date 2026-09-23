@@ -59,7 +59,7 @@ This guide takes you through testing everything on your own PC, from the automat
 | Administrator terminal | — | CPU temperatures (optional), DPAPI test (step 11) | — |
 | A wired USB mouse or keyboard | — | anti-theft test (step 8) | — |
 
-**Recommended:** test the lock screen (step 6) in a **virtual machine** or on a spare PC. It covers every monitor and blocks the Windows key, Alt+Tab and Task Manager. The guide explains how to get out, but a VM is more comfortable.
+**Recommended:** test the lock screen (step 6) in a **virtual machine** or on a spare PC. Its kiosk mode covers every monitor and blocks the Windows key and Alt+Tab. The guide explains how to get out, and step 6A shows a safe windowed test mode first.
 
 All commands below are **PowerShell**, run from the `Desktop-Agent` folder, unless marked *Git Bash*.
 
@@ -78,12 +78,12 @@ dotnet test BaronDeskAgent.slnx
 La génération a réussi. / Build succeeded.
     0 Warning(s)
     0 Error(s)
-Passed!  - Failed: 0, Passed: 75, Skipped: 0, Total: 75
+Passed!  - Failed: 0, Passed: 77, Skipped: 0, Total: 77
 ```
 
 Warnings are treated as errors, so any warning fails the build.
 
-What the 75 tests cover:
+What the 77 tests cover:
 
 | Test class | Covers |
 |---|---|
@@ -127,7 +127,7 @@ Type a menu key and press **Enter** to send something to the agent:
 
 | Key | Sends | Expected agent reaction |
 |---|---|---|
-| `1` | `LOCK` | locks (nack `EXEC_FAILED` if no LockUI is running: the overlay could not be confirmed) |
+| `1` | `LOCK` | locks. With the LockUI running: `COMMAND_ACK`. **Without it: `COMMAND_NACK EXEC_FAILED` "…the lock screen app (LockUI) is not running…"**. This is expected: the station *is* locked, but nothing is shown on screen, so the agent refuses to tell the backend it is. |
 | `2` | `UNLOCK` with a new session and a 60 s lease | unlocks, `command_ack` |
 | `3` | `LAUNCH_GAME` `notepad` | opens Notepad (only when unlocked) |
 | `4` | `END_SESSION` for the current session | closes Notepad, locks |
@@ -145,6 +145,8 @@ Type a menu key and press **Enter** to send something to the agent:
 | `q` | quit the mock | agent reconnects with backoff |
 
 The mock also plays the login server: **PIN `1234` is accepted**, anything else is rejected.
+
+Optional: `$env:MOCK_AUTO_RELOCK_SECONDS = "20"` before starting the mock makes it send `LOCK` automatically 20 s after every acknowledged `UNLOCK`. This is useful for the fullscreen lock screen, which covers this terminal (step 6B).
 
 ---
 
@@ -216,7 +218,8 @@ Keep the LockUI **closed** for this step, so you can keep typing in the terminal
 | 5.2 | Mock: `2` (UNLOCK) | `COMMAND_ACK`; agent: `Session … is active.` and `Station UNLOCKED` |
 | 5.3 | Mock: `3` (LAUNCH_GAME notepad) | Notepad opens on your desktop, `COMMAND_ACK` |
 | 5.4 | Mock: `3` again | No second Notepad; agent: `Game notepad is already running.` |
-| 5.5 | Mock: `4` (END_SESSION) | Notepad closes; agent: `Station LOCKED` and `Session … ended (user_logout)`. The mock shows `EXEC_FAILED` because no LockUI confirmed the overlay; with the LockUI running it is `COMMAND_ACK`. |
+| 5.5 | Mock: `4` (END_SESSION) | Notepad closes; agent: `Station LOCKED (overlay: HelperNotConnected)` and `Session … ended (user_logout)`. The mock shows `EXEC_FAILED` "Session ended. The station is now locked, but the lock screen app (LockUI) is not running…"; with the LockUI running it is `COMMAND_ACK`. |
+| 5.5b | Mock: `2`, then `1` (LOCK) | Same as 5.5: the agent locks (`Station LOCKED (overlay: HelperNotConnected)`) but answers `EXEC_FAILED` because no LockUI shows the overlay. In step 6 the same LOCK is acknowledged. |
 | 5.6 | Mock: `2` (UNLOCK), wait for one heartbeat, then `q` (backend goes down) | Agent keeps the session for the lease (60 s) + grace (10 s). After about **60–75 s**: `Station is unlocked without a valid lease (Expired). Failing closed.` then `Station LOCKED` and `Session … ended (lease_expired)`. |
 | 5.7 | Restart the mock | Agent reconnects; the mock shows a `state_report` with `Locked: true`, `SessionId: none` |
 
@@ -226,35 +229,74 @@ Keep the LockUI **closed** for this step, so you can keep typing in the terminal
 
 ## 6. Test the Lock Screen (LockUI)
 
+The LockUI can run in two modes. Start with **6A**: it tests the whole lock/unlock/PIN flow while your terminals stay usable. Then do **6B** to test the real kiosk behaviour.
+
+| Mode | Command | Covers the screen | Blocks keys | Use it for |
+|---|---|---|---|---|
+| **6A. Windowed test mode** (Debug builds only) | `dotnet run --project src/BaronDesk.LockUI -- --windowed` | No, normal window | No | IPC, PIN relay, LOCK/UNLOCK acks, "service unavailable", fail-closed |
+| **6B. Kiosk mode** (the real one) | `dotnet run --project src/BaronDesk.LockUI` | Yes, every monitor | Yes | Keyboard blocking, fullscreen, multi-monitor |
+
+`--windowed` is ignored in Release builds. Otherwise a gamer could start a windowed instance first, take the single-instance slot, and receive "lock" in a window they can simply move away.
+
+### 6A. Windowed Test Mode
+
+Start the mock (A) and the agent (B), then **terminal C:**
+
+```powershell
+dotnet run --project src/BaronDesk.LockUI -- --windowed
+```
+
+A normal window titled **"BaronDesk LockUI — TEST MODE — LOCKED"** appears, with a coloured banner showing the state. In the real mode the window would be hidden when unlocked; here it stays visible and switches to **UNLOCKED**, so you can watch both transitions.
+
+| Step | Action | Expected |
+|---|---|---|
+| 6A.1 | LockUI starts | Banner "state: LOCKED"; the status line clears once the pipe is connected and the server reachable. Agent: `LockUI helper connected.` |
+| 6A.2 | Type `0000`, press Enter | "Checking your PIN…" → "Incorrect PIN. Please try again." (the **backend** rejected it; the agent never checks PINs) |
+| 6A.3 | Type a wrong PIN 5 times, then try once more | The 6th attempt shows "Too many attempts. Try again in 30s." and the button is disabled for 30 s |
+| 6A.4 | Type `1234`, press Enter | "PIN accepted — unlocking…", banner switches to **UNLOCKED**. Mock: `[LOGIN_REQUEST] method=pin -> ACCEPTED`, `UNLOCK`, `COMMAND_ACK` |
+| 6A.5 | Mock: `1` (LOCK) | Banner back to **LOCKED**; the mock gets **`COMMAND_ACK`** (compare with step 5, where it was `EXEC_FAILED` without the LockUI). Agent: `Station LOCKED (overlay: Confirmed).` |
+| 6A.6 | Mock: `2` (UNLOCK from the dashboard), then `3` (Notepad), then `1` (LOCK) | UNLOCKED → Notepad opens → LOCKED **and Notepad closes** (`StopGameOnLock`: an overlay cannot cover a fullscreen game) |
+| 6A.7 | Unlocked: stop the **mock** (`q`) | Status "Service unavailable — please ask the staff for help."; after ~60–75 s (lease + grace) the banner switches to **LOCKED**, and the PIN box stays disabled: **no new sessions offline**. Restart the mock to log in again. |
+| 6A.8 | Unlocked: stop the **agent** (Ctrl+C in terminal B) | After **15 s** the LockUI switches to **LOCKED** by itself (without the service nothing enforces the lease). Restart the agent: it reconnects and stays locked. |
+| 6A.9 | Start a second LockUI in another terminal | It exits immediately: one lock screen per session |
+| 6A.10 | Close the window (✕) | Allowed in test mode only; the real lock screen cannot be closed while locked |
+
+> **Agent warning `Task Manager policy could not be applied … must run as LocalSystem or an administrator`** is expected here. Standard users cannot write their own `Policies` registry key, so disabling Task Manager is done by the service, which runs as LocalSystem in production. To see it work, run terminal B as Administrator: Task Manager is then refused while locked and available again after unlocking.
+
+### 6B. Kiosk Mode (Real Lock Screen)
+
 > ⚠ **Before you start — how to get out.**
-> The overlay covers every monitor and blocks the Windows key, Alt+Tab, Alt+F4 and Task Manager, and you **cannot type in your terminals while it is shown**.
+> The overlay covers every monitor and blocks the Windows key, Alt+Tab and Alt+F4, and **you cannot type in your terminals while it is shown**.
 >
 > - **Normal way out:** type PIN **`1234`** and press Enter (mock and agent must be running).
 > - **Emergency:** press **Ctrl+Alt+Del → Sign out**. Ctrl+Alt+Del cannot be blocked from user mode.
 > - Once it is **unlocked** (hidden), stop it from any terminal: `taskkill /IM BaronDesk.LockUI.exe /F`.
-> - If Task Manager stays disabled afterwards: `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System /v DisableTaskMgr /f`
+> - If the agent ran as Administrator and Task Manager stays disabled afterwards, from an **elevated** prompt: `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System /v DisableTaskMgr /f`
 
-Start the mock (A) and the agent (B) first, then **terminal C:**
+Because the terminals are covered, start the mock with **auto-relock**: it sends `LOCK` by itself N seconds after every acknowledged `UNLOCK`, so you never need to type in the mock while testing:
 
 ```powershell
+# terminal A
+$env:MOCK_AUTO_RELOCK_SECONDS = "20"
+node tools/mock-server/mock-server.js
+
+# terminal B
+dotnet run --project src/BaronDeskAgent.ServiceCore
+
+# terminal C
 dotnet run --project src/BaronDesk.LockUI
 ```
 
 | Step | Action | Expected |
 |---|---|---|
-| 6.1 | LockUI starts | Fullscreen lock screen on **all** monitors. The status line is empty once the pipe connects and the server is reachable. |
-| 6.2 | Press the Windows key, Alt+Tab, Alt+F4, Ctrl+Shift+Esc | Nothing happens |
-| 6.3 | Type `0000`, press Enter | "Checking your PIN…" → "Incorrect PIN. Please try again." (the **backend** rejected it; the agent never checks PINs) |
-| 6.4 | Type a wrong PIN 5 times, then try once more | The 6th attempt shows "Too many attempts. Try again in 30s." and the button is disabled for 30 s |
-| 6.5 | Type `1234`, press Enter | "PIN accepted — unlocking…", then the overlay disappears. The mock shows `[LOGIN_REQUEST] method=pin -> ACCEPTED`, then `UNLOCK`, then `COMMAND_ACK` |
-| 6.6 | Mock: `1` (LOCK, e.g. billing run-out) | Overlay comes back immediately; the mock gets `COMMAND_ACK` (overlay confirmed). Type `1234` to unlock again. |
-| 6.7 | Unlocked: mock `3` (Notepad), then mock `1` | Overlay appears **and Notepad is closed** (`StopGameOnLock`: an overlay cannot cover a fullscreen game). Unlock with `1234`. |
-| 6.8 | Unlocked: stop the **mock** (`q`) | Station stays unlocked for up to ~75 s (lease + grace), then the overlay appears. The status line reads "Service unavailable — please ask the staff for help." and the PIN box is disabled: **no new sessions offline**. Restart the mock to unlock again with `1234`. |
-| 6.9 | Unlocked: stop the **agent** (Ctrl+C in terminal B) | After **15 s** the LockUI locks itself (without the service nothing enforces the lease). Restart the agent: the LockUI reconnects and stays locked. |
-| 6.10 | Start a second LockUI (`dotnet run --project src/BaronDesk.LockUI` in another terminal while unlocked) | It exits immediately: one lock screen per session |
-| 6.11 | While locked, plug in or unplug a second monitor | The overlay resizes and covers the new layout |
+| 6B.1 | LockUI starts | Fullscreen lock screen on **all** monitors |
+| 6B.2 | Press the Windows key, Alt+Tab, Alt+Esc, Alt+F4, Ctrl+Esc, Ctrl+Shift+Esc | Nothing happens |
+| 6B.3 | Type `1234`, press Enter | The overlay disappears; you have your desktop back |
+| 6B.4 | Wait 20 s | The mock's auto-relock sends `LOCK`: the overlay comes back by itself. Mock log (read it after unlocking): `[AUTO-RELOCK] Sending LOCK in 20s...` then `COMMAND_ACK` |
+| 6B.5 | While locked, plug in or unplug a second monitor | The overlay resizes and covers the new layout |
+| 6B.6 | Click elsewhere / try to switch windows | The overlay re-activates and stays on top |
 
-When done: unlock with `1234`, then `taskkill /IM BaronDesk.LockUI.exe /F`.
+When done: type `1234`, then within 20 s run `taskkill /IM BaronDesk.LockUI.exe /F`, and stop the mock (`q`) and the agent (Ctrl+C). Remove the variable with `Remove-Item Env:MOCK_AUTO_RELOCK_SECONDS`.
 
 ---
 
@@ -411,13 +453,17 @@ In production the service runs as LocalSystem, which can always read the file.
 |---|---|
 | Mock: `EADDRINUSE :8443` | A previous mock is still running: `Get-NetTCPConnection -LocalPort 8443 -State Listen \| ForEach-Object { Stop-Process -Id $_.OwningProcess }` |
 | Agent keeps logging `Reconnecting in …` | Mock not running, or a `wss://`/`ws://` mismatch: check `$env:Agent__ServerUrl` and clean it up (step 10.6) |
+| `LOCK` / `END_SESSION` answered `EXEC_FAILED` "…lock screen app (LockUI) is not running or not connected…" | Expected without the LockUI: the station is locked, but nothing covers the screen, so the agent reports it honestly. Start the LockUI (step 6) and the same command is acknowledged. |
 | Production run still says "Development" | Add `--no-launch-profile` (step 10.5) |
 | No CPU temperature in telemetry | Run the agent as Administrator (sensor driver) |
 | `Hardware sensors are unavailable; telemetry and hardware alerts are disabled.` | Sensor driver blocked (no admin rights, antivirus, HVCI). The rest of the agent keeps working. |
 | Alerts from `t` don't appear | Wait up to 15 s (idle sampling); the alarm fires only once until the temperature drops below threshold − 5 °C |
 | USB alert never fires | Anti-theft may be off in your stored policy: press `a` first. The device must be wired USB HID and present before the agent started, or plugged in while idle. |
 | Stuck on the lock screen | PIN `1234` (mock + agent running), or **Ctrl+Alt+Del → Sign out** |
-| Task Manager disabled after testing | `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System /v DisableTaskMgr /f` |
+| Agent warns `Task Manager policy could not be applied …` | Expected when the agent runs as a standard user: only LocalSystem / Administrators can write that policy. Run the agent as Administrator to test it. |
+| Task Manager disabled after testing (agent ran as Administrator and was stopped while locked) | From an **elevated** prompt: `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System /v DisableTaskMgr /f` |
+| `--windowed` shows the fullscreen lock screen anyway | You are running a Release build (the flag is ignored there on purpose). Use `dotnet run` (Debug) |
+| Can't type in the mock while the kiosk lock screen is shown | Use `MOCK_AUTO_RELOCK_SECONDS` (step 6B), or the windowed mode (step 6A) |
 | Start from a clean local state | Stop the agent, then delete `C:\ProgramData\BaronDeskAgent\Data\agent.sqlite*`; it is re-created (policy defaults, `notepad` seed) on the next start |
 | Inspect the local database | Open `agent.sqlite` with *DB Browser for SQLite* (tables `OutboxMessages`, `GameCatalog`, `StationPolicy`, `HandledCommands`) |
 
@@ -425,13 +471,14 @@ In production the service runs as LocalSystem, which can always read the file.
 
 ## 13. Final Checklist
 
-- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 75 passed
+- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 77 passed
 - [ ] Agent connects: `handshake`, `state_report`, `heartbeat` in `seq` order
 - [ ] `UNKNOWN_TYPE`, replayed `seq`, stale `UNLOCK` rejected; stale `LOCK` executed; malformed frame ignored
 - [ ] Reconnect with growing, jittered delays after the mock stops
 - [ ] UNLOCK → Notepad launch → END_SESSION closes it
 - [ ] Mock down while unlocked → station locks after lease + grace
-- [ ] LockUI: escape keys blocked, wrong PIN rejected by the backend, `1234` unlocks, 5 failures → 30 s lockout
+- [ ] LockUI windowed mode (6A): wrong PIN rejected by the backend, `1234` unlocks, 5 failures → 30 s lockout, LOCK acknowledged
+- [ ] LockUI kiosk mode (6B): fullscreen on every monitor, escape keys blocked, auto-relock brings the overlay back
 - [ ] LOCK shows the overlay and closes the running game
 - [ ] Mock down → "Service unavailable", no login possible
 - [ ] Agent killed → LockUI locks itself after 15 s; second LockUI instance exits

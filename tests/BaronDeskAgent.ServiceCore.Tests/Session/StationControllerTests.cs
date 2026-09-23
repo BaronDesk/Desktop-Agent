@@ -111,7 +111,7 @@ public sealed class StationControllerTests : IAsyncLifetime
         var sessionId = Guid.NewGuid();
         await _station.StartSessionAsync(sessionId, null, CancellationToken.None);
 
-        Assert.True(await _station.LockAsync(CancellationToken.None));
+        Assert.Equal(OverlayResult.Confirmed, await _station.LockAsync(CancellationToken.None));
 
         var snapshot = _station.GetSnapshot();
         Assert.True(snapshot.Locked);
@@ -119,13 +119,24 @@ public sealed class StationControllerTests : IAsyncLifetime
         Assert.Null(snapshot.LeaseExpiresAt);
     }
 
-    [Fact]
-    public async Task Lock_reports_failure_when_the_overlay_is_not_confirmed()
+    [Theory]
+    [InlineData(OverlayResult.HelperNotConnected)]
+    [InlineData(OverlayResult.NotConfirmed)]
+    public async Task Lock_reports_why_the_overlay_is_not_confirmed_but_still_locks(OverlayResult overlay)
     {
-        _lockScreen.Confirms = false;
+        await _station.StartSessionAsync(Guid.NewGuid(), null, CancellationToken.None);
+        _lockScreen.Result = overlay;
 
-        Assert.False(await _station.LockAsync(CancellationToken.None));
+        Assert.Equal(overlay, await _station.LockAsync(CancellationToken.None));
         Assert.True(_station.GetSnapshot().Locked);
+        Assert.Null(_station.GetSnapshot().LeaseExpiresAt);
+    }
+
+    [Fact]
+    public void Lock_failure_reasons_name_the_missing_lock_screen_app()
+    {
+        Assert.Contains("not running", OverlayResult.HelperNotConnected.DescribeLockFailure(), StringComparison.Ordinal);
+        Assert.Contains("did not confirm", OverlayResult.NotConfirmed.DescribeLockFailure(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -136,7 +147,7 @@ public sealed class StationControllerTests : IAsyncLifetime
 
         var result = await _station.EndSessionAsync(Guid.NewGuid(), "late redelivery", CancellationToken.None);
 
-        Assert.Equal(EndSessionResult.StaleSessionIgnored, result);
+        Assert.True(result.StaleSessionIgnored);
         Assert.False(_station.GetSnapshot().Locked);
         Assert.Equal(active, _station.GetSnapshot().SessionId);
     }
@@ -149,7 +160,7 @@ public sealed class StationControllerTests : IAsyncLifetime
 
         var result = await _station.EndSessionAsync(active, "user_logout", CancellationToken.None);
 
-        Assert.Equal(EndSessionResult.Ended, result);
+        Assert.Equal(EndSessionResult.Ended(OverlayResult.Confirmed), result);
         Assert.True(_station.GetSnapshot().Locked);
         Assert.Null(_station.GetSnapshot().SessionId);
         Assert.Null(_station.GetSnapshot().LeaseExpiresAt);
