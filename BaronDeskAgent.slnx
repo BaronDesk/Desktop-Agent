@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BaronDesk.LockUI/BaronDesk.LockUI.csproj" />
+    <Project Path="src/BaronDesk.Shared/BaronDesk.Shared.csproj" />
+    <Project Path="src/BaronDeskAgent.ServiceCore/BaronDeskAgent.ServiceCore.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BaronDeskAgent.ServiceCore.Tests/BaronDeskAgent.ServiceCore.Tests.csproj" />
+  </Folder>
+</Solution>
