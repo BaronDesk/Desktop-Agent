@@ -42,7 +42,7 @@ This guide takes you through testing everything on your own PC, from the automat
 8. [Test USB anti-theft](#8-test-usb-anti-theft)
 9. [Test policy updates](#9-test-policy-updates)
 10. [Test TLS certificate pinning and production validation](#10-test-tls-certificate-pinning-and-production-validation)
-11. [Test the station credential (DPAPI)](#11-test-the-station-credential-dpapi)
+11. [Test the station credential (DPAPI)](#11-test-the-station-credential-dpapi) and [enrollment](#11b-test-enrollment-first-connection)
 12. [Troubleshooting](#12-troubleshooting)
 13. [Final checklist](#13-final-checklist)
 
@@ -78,18 +78,18 @@ dotnet test BaronDeskAgent.slnx
 La génération a réussi. / Build succeeded.
     0 Warning(s)
     0 Error(s)
-Passed!  - Failed: 0, Passed: 77, Skipped: 0, Total: 77
+Passed!  - Failed: 0, Passed: 94, Skipped: 0, Total: 94
 ```
 
 Warnings are treated as errors, so any warning fails the build.
 
-What the 77 tests cover:
+What the 94 tests cover:
 
 | Test class | Covers |
 |---|---|
 | `ReplayGuardTests` | sequence replay, stale timestamps, server clock offset, restrictive-command exemption |
 | `ReconnectBackoffTests` | exponential backoff with jitter stays within bounds |
-| `AgentOptionsValidatorTests` | pin required in production, no untrusted TLS, no plain-text token |
+| `AgentOptionsValidatorTests` | pin required in production, no untrusted TLS, no plain-text station/enrollment token, https enrollment endpoint |
 | `CommandDispatcherTests` | allow-list, idempotency (only successes recorded), STALE, early SHUTDOWN ack |
 | `CommandPayloadTests` | strict parsing: no culture-dependent numbers, unknown policy fields rejected |
 | `StationControllerTests` | unlock, lease expiry fail-closed, renewals, LOCK / END_SESSION semantics |
@@ -99,6 +99,8 @@ What the 77 tests cover:
 | `TelemetryDeltaFilterTests` | only changes sent, full snapshot before the 30 s backend TTL |
 | `PipeLineReaderTests` | IPC messages capped at 4 KiB |
 | `DpapiStationCredentialStoreTests` | encryption, file ACL, fail-closed on corrupt blobs, never logged |
+| `DpapiStationKeyStoreTests` | station key pair persists, never in plain text, unreadable key → new identity |
+| `EnrollmentServiceTests` | first-contact enrollment: signed request, PENDING polling, ENROLLED / REJECTED, retries, tokens never logged |
 
 Run a single class:
 
@@ -442,9 +444,23 @@ Use an **elevated** PowerShell (Run as administrator) in the `Desktop-Agent` fol
 | 11.7 | `Get-Content C:\ProgramData\BaronDeskAgent\Data\station.credential` | Binary garbage: the token is **not** readable in plain text |
 | 11.8 | Start the mock, then the agent **in the elevated terminal** | Mock: `[AUTH] Station credential presented (Bearer, 19 chars, value hidden)` |
 | 11.9 | Start the agent in a **non-elevated** terminal | Agent: `The station credential file cannot be read (UnauthorizedAccessException).`; mock: `[AUTH] No station credential presented`. The file really is SYSTEM/Administrators-only. |
-| 11.10 | `dotnet run --project src/BaronDeskAgent.ServiceCore -- --clear-station-token` (elevated) | `Station credential removed.` |
+| 11.10 | `dotnet run --project src/BaronDeskAgent.ServiceCore -- --clear-station-token` (elevated) | `Station credential and key pair removed.` |
 
 In production the service runs as LocalSystem, which can always read the file.
+
+## 11B. Test Enrollment (First Connection)
+
+The station's first contact: it sends the one-time token and its own public key, signed with its private key, and waits for admin approval. Details: [docs/Enrollment.md](docs/Enrollment.md). Start from a station **without** a credential (`--clear-station-token`, elevated).
+
+| Step | Command | Expected |
+|---|---|---|
+| 11B.1 | Terminal A: `node tools/mock-server/mock-server.js` | Menu shows `[e] Approve` / `[x] Reject` |
+| 11B.2 | Terminal B: `$env:DOTNET_ENVIRONMENT = "Development"; $env:Agent__EnrollmentToken = "enroll-demo-7f3c9a"; dotnet run --project src/BaronDeskAgent.ServiceCore` | Agent: `Generated a new station key pair`, `Enrollment pending…`. Mock: `[ENROLLMENT] … token=(present, hidden) signature=VALID`, `PENDING` |
+| 11B.3 | Press `e` in terminal A | Next poll: mock `Issuing the station token`, then `[AUTH] Station credential presented`. Agent: `Station enrolled` |
+| 11B.4 | Restart the agent | No enrollment request: the stored credential is used directly |
+| 11B.5 | Delete `station.credential` + `station.key`, restart the mock and agent, press `x` | Agent: `Enrollment rejected by the server (declined by admin)`, connects without a credential |
+
+Hands-free: `$env:MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS = "3"` approves every new station after 3 s. In production the one-time token is provisioned with `"<token>" | BaronDeskAgent.ServiceCore.exe --set-enrollment-token` (elevated); `Agent__EnrollmentToken` is refused outside Development.
 
 ---
 
@@ -472,7 +488,7 @@ In production the service runs as LocalSystem, which can always read the file.
 
 ## 13. Final Checklist
 
-- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 77 passed
+- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 94 passed
 - [ ] Agent connects: `handshake`, `state_report`, `heartbeat` in `seq` order
 - [ ] `UNKNOWN_TYPE`, replayed `seq`, stale `UNLOCK` rejected; stale `LOCK` executed; malformed frame ignored
 - [ ] Reconnect with growing, jittered delays after the mock stops

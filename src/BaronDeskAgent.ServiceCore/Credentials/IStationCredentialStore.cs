@@ -4,9 +4,8 @@ namespace BaronDeskAgent.ServiceCore.Credentials;
 /// Storage of the long-lived station credential (station JWT) that authenticates the WSS upgrade request.
 /// </summary>
 /// <remarks>
-/// OPEN (roadmap branch 4, skill §15 item 8): enrollment (one-time token → admin approval → credential issued by
-/// the backend) is not defined yet. Until then the credential is provisioned with
-/// <c>BaronDeskAgent.ServiceCore.exe --set-station-token</c>; enrollment will call <see cref="SaveToken"/>.
+/// Written by <see cref="Enrollment.EnrollmentService"/> once an admin approves the station, or provisioned by hand
+/// with <c>BaronDeskAgent.ServiceCore.exe --set-station-token</c>.
 /// </remarks>
 public interface IStationCredentialStore
 {

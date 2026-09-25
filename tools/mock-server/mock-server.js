@@ -5,6 +5,9 @@
 //   MOCK_TLS_CERT=cert.pem MOCK_TLS_KEY=key.pem node mock-server.js
 // then copy the printed SHA-256 fingerprint into Agent:PinnedCertificateHash.
 //
+// Enrollment: POST /enrollment/request answers PENDING until you press [e] (approve) or [x] (reject).
+// Hands-free: MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS=5 node mock-server.js approves every new station after 5 s.
+//
 // Login relay: typing PIN 1234 on the lock screen is accepted (login_result + UNLOCK); anything else is rejected.
 //
 // Hands-free lock screen testing: MOCK_AUTO_RELOCK_SECONDS=20 node mock-server.js
@@ -18,16 +21,20 @@ const readline = require('readline');
 
 const PORT = 8443;
 const WS_PATH = '/agent-ws';
+const ENROLLMENT_PATH = '/enrollment/request';
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const ACCEPTED_PIN = '1234';
 const LEASE_SECONDS = 60;
 
 const AUTO_RELOCK_SECONDS = Number(process.env.MOCK_AUTO_RELOCK_SECONDS) || 0;
+const AUTO_APPROVE_ENROLLMENT_SECONDS = Number(process.env.MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS) || 0;
 
 let activeSocket = null;
 let serverSequence = 100;
 let currentSessionId = null;
 const pendingUnlockIds = new Set();
+const enrollments = new Map(); // serialNumber -> { publicKey, status, machineId?, stationToken? }
+let pendingEnrollmentSerial = null;
 
 function sendUnlock() {
     currentSessionId = crypto.randomUUID();
@@ -46,9 +53,101 @@ const tlsKey = process.env.MOCK_TLS_KEY;
 const useTls = Boolean(tlsCert && tlsKey);
 
 const requestHandler = (req, res) => {
+    if (req.method === 'POST' && req.url === ENROLLMENT_PATH) {
+        handleEnrollmentRequest(req, res);
+        return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('BaronDesk Mock Server running. Connect over WebSocket to ' + WS_PATH);
 };
+
+// -------------------------------------------------------------
+// Enrollment (POST /enrollment/request) - the station's first contact
+// -------------------------------------------------------------
+// The agent re-posts the same signed request while PENDING. Like the real backend should, the mock:
+//   - verifies the ECDSA signature against the public key in the request (proof of possession),
+//   - pins the public key recorded on the first request (a later request with another key is refused),
+//   - only releases the station token after approval ([e] in the menu; [x] rejects).
+function handleEnrollmentRequest(req, res) {
+    let body = '';
+    req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 64 * 1024) req.destroy();
+    });
+    req.on('end', () => {
+        const reply = (status, json) => {
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(json));
+        };
+
+        let request;
+        try {
+            request = JSON.parse(body);
+        } catch {
+            return reply(400, { status: 'REJECTED', reason: 'invalid JSON' });
+        }
+
+        const signingInput = ['BARONDESK-ENROLL-V1', request.oneTimeToken, request.serialNumber, request.mac,
+            request.ip, request.agentPublicKey, request.signedAt].join('\n');
+        let signatureValid = false;
+        try {
+            const publicKey = crypto.createPublicKey({ key: Buffer.from(request.agentPublicKey, 'base64'), format: 'der', type: 'spki' });
+            signatureValid = crypto.verify('sha256', Buffer.from(signingInput, 'utf8'), publicKey, Buffer.from(request.signature, 'base64'));
+        } catch {
+            signatureValid = false;
+        }
+
+        const serial = request.serialNumber;
+        let enrollment = enrollments.get(serial);
+        console.log(`\n\x1b[35m[ENROLLMENT]\x1b[0m serial=${serial} mac=${request.mac} ip=${request.ip} ` +
+            `token=${request.oneTimeToken ? '(present, hidden)' : '(missing)'} signature=${signatureValid ? 'VALID' : 'INVALID'}`);
+
+        if (!signatureValid || !request.oneTimeToken) {
+            return reply(403, { status: 'REJECTED', reason: 'invalid signature or token' });
+        }
+
+        if (!enrollment) {
+            enrollment = { publicKey: request.agentPublicKey, status: 'PENDING' };
+            enrollments.set(serial, enrollment);
+            pendingEnrollmentSerial = serial;
+            console.log(`\x1b[33m[ENROLLMENT]\x1b[0m New station ${serial} is PENDING. Press [e] to approve or [x] to reject.`);
+            if (AUTO_APPROVE_ENROLLMENT_SECONDS > 0) {
+                setTimeout(() => decideEnrollment(true), AUTO_APPROVE_ENROLLMENT_SECONDS * 1000);
+            }
+        } else if (enrollment.publicKey !== request.agentPublicKey) {
+            console.log('\x1b[31m[ENROLLMENT]\x1b[0m Public key differs from the first request: refused.');
+            return reply(403, { status: 'REJECTED', reason: 'station key mismatch' });
+        }
+
+        if (enrollment.status === 'ENROLLED') {
+            console.log(`\x1b[32m[ENROLLMENT]\x1b[0m Issuing the station token to ${serial}.`);
+            return reply(200, { status: 'ENROLLED', machineId: enrollment.machineId, stationToken: enrollment.stationToken });
+        }
+
+        return reply(200, { status: enrollment.status, reason: enrollment.status === 'REJECTED' ? 'declined by admin' : undefined });
+    });
+}
+
+function decideEnrollment(approve) {
+    const enrollment = pendingEnrollmentSerial && enrollments.get(pendingEnrollmentSerial);
+    if (!enrollment || enrollment.status !== 'PENDING') {
+        console.log('\x1b[33m[WARN]\x1b[0m No pending enrollment.');
+        return;
+    }
+
+    if (approve) {
+        enrollment.status = 'ENROLLED';
+        enrollment.machineId = crypto.randomUUID();
+        // Fake station JWT (unsigned mock value), handed out on the agent's next poll.
+        const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+        enrollment.stationToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: enrollment.machineId, serial: pendingEnrollmentSerial })}.mock`;
+    } else {
+        enrollment.status = 'REJECTED';
+    }
+
+    console.log(`\n\x1b[36m[ENROLLMENT]\x1b[0m ${pendingEnrollmentSerial} -> ${enrollment.status} (delivered on the agent's next poll).`);
+}
 
 const server = useTls
     ? https.createServer({ cert: fs.readFileSync(tlsCert), key: fs.readFileSync(tlsKey) }, requestHandler)
@@ -319,6 +418,8 @@ function printMenu() {
     console.log(' [a] POLICY_UPDATE: enable USB anti-theft alerts (5s debounce)');
     console.log(' [t] POLICY_UPDATE: temperature thresholds 30°C (expect TEMPERATURE_WARNING alerts)');
     console.log(' [r] POLICY_UPDATE: restore default thresholds (85°C)');
+    console.log(' [e] Approve the pending enrollment (station token issued on the next poll)');
+    console.log(' [x] Reject the pending enrollment');
     console.log(' [q] Quit');
     console.log(` Lock-screen PIN accepted by this mock: ${ACCEPTED_PIN}`);
     console.log('----------------------------------------');
@@ -382,6 +483,12 @@ rl.on('line', (line) => {
                 sendFrame(activeSocket, 0x01, '{ "type": "LOCK", "this is not": valid json');
                 console.log('\nSent a malformed frame.');
             }
+            break;
+        case 'e':
+            decideEnrollment(true);
+            break;
+        case 'x':
+            decideEnrollment(false);
             break;
         case 'q':
             console.log('Exiting mock server...');

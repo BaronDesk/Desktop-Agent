@@ -15,7 +15,9 @@ Desktop-Agent
 │       ├── Credentials
 │       │   ├── IStationCredentialStore.cs
 │       │   ├── DpapiStationCredentialStore.cs
-│       │   └── CredentialCommandLine.cs      (--set-station-token / --clear-station-token)
+│       │   ├── ProtectedFile.cs              (DPAPI + protected ACL, shared with enrollment secrets)
+│       │   ├── DpapiTokenStore.cs            (base class)
+│       │   └── CredentialCommandLine.cs      (--set/--clear-station-token, --set/--clear-enrollment-token)
 │       │
 │       ├── Connection
 │       │   └── WebSocketConnection.cs        (Authorization: Bearer on the upgrade request)
@@ -43,9 +45,9 @@ Desktop-Agent
 Two identities exist (ADR-003): the **station** (this machine) and the **user** (the gamer). The station authenticates the connection once with a long-lived **station JWT**; commands are then trusted on that channel.
 
 ```text
-Provisioning (elevated prompt)            Enrollment (OPEN, roadmap branch 4)
+Provisioning (elevated prompt)            Enrollment (first connection, Enrollment.md)
         │                                          │
-        │ --set-station-token                      │ one-time token → admin approval
+        │ --set-station-token (manual fallback)    │ signed one-time token → admin approval
         │                                          │ → backend issues the credential
         └──────────────────┬───────────────────────┘
                            ▼
@@ -148,7 +150,7 @@ The same check runs when reading: a decrypted value that fails it is treated as 
 | Different entropy (other application's data) | `null` | same |
 | Decrypted value malformed | `null` | ERROR "malformed; re-provision it" |
 
-Without a credential the agent still attempts the connection (with no `Authorization` header) and logs a warning. The backend rejects the station until it is provisioned or enrolled, and the reconnect backoff keeps a rejected station from hammering the server.
+Without a credential (and no enrollment token to enroll with, see `Enrollment.md`) the agent still attempts the connection (with no `Authorization` header) and logs a warning. The backend rejects the station until it is provisioned or enrolled, and the reconnect backoff keeps a rejected station from hammering the server.
 
 **The token is never logged**, never written to SQLite, and never part of an exception message. `DpapiStationCredentialStoreTests.The_token_never_appears_in_logs` guards this.
 
@@ -156,7 +158,7 @@ Without a credential the agent still attempts the connection (with no `Authoriza
 
 ## 6. Provisioning from the Command Line
 
-Until enrollment exists, the credential is provisioned from an **elevated** prompt, before the service starts:
+Normally the credential comes from enrollment (`--set-enrollment-token`, see `Enrollment.md`). As a manual fallback it can be provisioned from an **elevated** prompt, before the service starts:
 
 ```powershell
 # piped (installers, scripts)
@@ -167,7 +169,7 @@ BaronDeskAgent.ServiceCore.exe --set-station-token
 Station token: ************
 
 # remove
-BaronDeskAgent.ServiceCore.exe --clear-station-token
+BaronDeskAgent.ServiceCore.exe --clear-station-token   # also removes the station key pair (station.key)
 ```
 
 | Rule | Reason |
@@ -237,5 +239,5 @@ var token = _credentials.TryGetToken() ?? _options.StationToken;
 - [x] `--set-station-token` (stdin or hidden input) / `--clear-station-token`, elevation required
 - [x] Plain-text `StationToken` rejected outside Development
 - [x] Unit tests, including "never on disk in plain text" and "never in logs"
-- [ ] Enrollment flow: one-time token → admin approval → credential issued (OPEN, roadmap branch 4, skill §15 item 8)
+- [x] Enrollment flow: one-time token → admin approval → credential issued (agent side, see `Enrollment.md`; response shape OPEN with backend C, skill §15 item 8)
 - [ ] Credential transport confirmed with backend member C: upgrade header vs handshake (OPEN, skill §15 item 1)

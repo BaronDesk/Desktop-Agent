@@ -31,6 +31,21 @@ public sealed class AgentOptions
     /// </summary>
     public string? StationToken { get; set; }
 
+    /// <summary>
+    /// Enrollment endpoint. Defaults to <c>POST /enrollment/request</c> on the <see cref="ServerUrl"/> host
+    /// (<c>wss</c> → <c>https</c>), protected by the same certificate pin.
+    /// </summary>
+    public string? EnrollmentUrl { get; set; }
+
+    /// <summary>
+    /// Development only: plain-text fallback for the one-time enrollment token. Everywhere else it is provisioned with
+    /// <c>--set-enrollment-token</c> (DPAPI) and a value here is rejected at startup.
+    /// </summary>
+    public string? EnrollmentToken { get; set; }
+
+    /// <summary>How often a <c>PENDING</c> enrollment asks again whether an admin approved the station.</summary>
+    public double EnrollmentPollSeconds { get; set; } = 15.0;
+
     /// <summary>Full path of <c>BaronDesk.LockUI.exe</c>. When set, only that executable may use the IPC pipe and the service relaunches it if it dies.</summary>
     public string? LockUiExecutablePath { get; set; }
 
@@ -45,6 +60,31 @@ public sealed class AgentOptions
 
     public string ResolveSerialNumber() =>
         string.IsNullOrWhiteSpace(SerialNumber) ? Environment.MachineName : SerialNumber.Trim();
+
+    /// <exception cref="UriFormatException">The configured or derived URL is not an absolute URI.</exception>
+    public Uri ResolveEnrollmentUri()
+    {
+        if (!string.IsNullOrWhiteSpace(EnrollmentUrl))
+        {
+            return new Uri(EnrollmentUrl, UriKind.Absolute);
+        }
+
+        var server = new Uri(ServerUrl, UriKind.Absolute);
+        var builder = new UriBuilder(server)
+        {
+            Scheme = server.Scheme == "ws" ? Uri.UriSchemeHttp : Uri.UriSchemeHttps,
+            Path = "/enrollment/request",
+            Query = string.Empty
+        };
+
+        // UriBuilder keeps an explicit port; for wss:// on the default port it must become 443, not -1.
+        if (server.IsDefaultPort)
+        {
+            builder.Port = -1;
+        }
+
+        return builder.Uri;
+    }
 
     /// <summary>The pinned certificate hash as bytes, or null when no pin is configured.</summary>
     /// <exception cref="FormatException">The configured value is not 32 bytes of hex.</exception>

@@ -109,6 +109,7 @@ A Windows Service runs in Session 0 with no desktop, so it cannot show the lock 
 | Hardware alerts, USB anti-theft | [TelemetryAlerts.md](TelemetryAlerts.md) | `HardwareAlertEvaluator`, `UsbMonitorService` |
 | Station policy, `POLICY_UPDATE` | [PolicyStore.md](PolicyStore.md) | `StationPolicy`, `PolicyStore` |
 | Station credential (DPAPI) | [CredentialStore.md](CredentialStore.md) | `DpapiStationCredentialStore`, `CredentialCommandLine` |
+| First connection: enrollment, station key pair | [Enrollment.md](Enrollment.md) | `EnrollmentService`, `HttpEnrollmentClient`, `DpapiStationKeyStore` |
 | SQLite, data directory, migrations | [LocalStorage.md](LocalStorage.md) | `AgentDatabase`, `SecureDataDirectory`, `DatabaseInitializer` |
 | Code review findings and fixes | [ReviewFixes.md](ReviewFixes.md) | — |
 
@@ -136,6 +137,7 @@ Envelope (frozen): `{ "type", "id", "ts", "seq", "payload" }`. Outbound `seq`/`t
 | server → agent | `LAUNCH_GAME` | `gameId` | SessionCommandsAndSystem |
 | server → agent | `SHUTDOWN` | `action?, delaySeconds?, reason?` | SessionCommandsAndSystem |
 | server → agent | `POLICY_UPDATE` | partial `StationPolicy` | PolicyStore |
+| agent → server (REST, before the WSS link) | `POST /enrollment/request` | `oneTimeToken, mac, ip` + ⚠ OPEN `serialNumber, machineName, agentVersion, agentPublicKey, signedAt, signature` | Enrollment |
 
 ⚠ OPEN items are proposals awaiting confirmation from backend member C (skill document §15).
 
@@ -146,7 +148,7 @@ Envelope (frozen): `{ "type", "id", "ts", "seq", "payload" }`. Outbound `seq`/`t
 ```text
 BaronDeskAgent.ServiceCore.exe
       │
-      ├── --set-station-token / --clear-station-token ?  ──► provisioning only, exit
+      ├── --set/--clear-enrollment-token, --set/--clear-station-token ?  ──► provisioning only, exit
       │
       ├── Build host, validate AgentOptions (unsafe TLS / plain-text token → stop)
       │
@@ -159,7 +161,7 @@ BaronDeskAgent.ServiceCore.exe
       │
       └── Run hosted workers
             ├── PipeServer            (lock screen IPC + watchdog)
-            ├── ConnectionWorker      (connect → handshake → state_report → receive)
+            ├── ConnectionWorker      (first run: enroll → connect → handshake → state_report → receive)
             ├── HeartbeatWorker
             ├── OutboxWorker
             ├── HardwareMonitorService
@@ -181,6 +183,9 @@ Static settings live in the `Agent` section of `appsettings.json`, validated at 
 | `AllowUntrustedCertificate` | Development only |
 | `SerialNumber` | Defaults to the machine name |
 | `StationToken` | Development-only fallback; production uses DPAPI |
+| `EnrollmentUrl` | Defaults to `https://<ServerUrl host>/enrollment/request`; `http://` only in Development |
+| `EnrollmentToken` | Development-only fallback for the one-time token; production uses `--set-enrollment-token` (DPAPI) |
+| `EnrollmentPollSeconds` | How often a `PENDING` enrollment asks again (default 15) |
 | `LockUiExecutablePath` | Enables LockUI image verification and relaunch |
 | `ReconnectBaseDelaySeconds`, `ReconnectMaxDelaySeconds`, `KeepAliveIntervalSeconds`, `MaxTimestampDriftSeconds` | Connection tuning |
 
@@ -192,7 +197,7 @@ Everything the backend tunes at runtime (cadences, lease, thresholds, debounce, 
 
 ```powershell
 dotnet build BaronDeskAgent.slnx          # 0 warnings (warnings are errors)
-dotnet test BaronDeskAgent.slnx           # 77 tests
+dotnet test BaronDeskAgent.slnx           # 94 tests
 
 node tools/mock-server/mock-server.js
 $env:DOTNET_ENVIRONMENT = "Development"; dotnet run --project src/BaronDeskAgent.ServiceCore
@@ -202,7 +207,8 @@ dotnet run --project src/BaronDesk.LockUI # covers the screen; the mock accepts 
 Production provisioning (elevated prompt):
 
 ```powershell
-"<station JWT>" | BaronDeskAgent.ServiceCore.exe --set-station-token
+"<one-time token>" | BaronDeskAgent.ServiceCore.exe --set-enrollment-token   # enrolls on first start (Enrollment.md)
+"<station JWT>" | BaronDeskAgent.ServiceCore.exe --set-station-token         # manual fallback
 ```
 
 ---
@@ -218,7 +224,7 @@ Production provisioning (elevated prompt):
 - [x] Branch 8 — Policy store with live updates
 - [x] Code review fixes (critical, high, medium) — see `ReviewFixes.md`
 - [x] Branch 4 (part) — DPAPI credential store and provisioning command
-- [ ] Branch 4 — Enrollment flow (waits for backend endpoints)
+- [x] Branch 4 — Enrollment flow: station key pair, signed first-contact request, approval polling (agent side; response shape OPEN with backend C)
 - [ ] Branch 9 — Windows Service hosting, recovery, LockUI launch at sign-in
 - [ ] Branch 10 — Benchmark report (`docs/benchmark/`)
 - [ ] Game catalog delivery from the backend (skill §15 item 9)

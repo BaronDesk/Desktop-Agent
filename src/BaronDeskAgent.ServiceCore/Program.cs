@@ -4,6 +4,7 @@ using BaronDeskAgent.ServiceCore.Commands.Handlers;
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Connection;
 using BaronDeskAgent.ServiceCore.Credentials;
+using BaronDeskAgent.ServiceCore.Enrollment;
 using BaronDeskAgent.ServiceCore.Games;
 using BaronDeskAgent.ServiceCore.Ipc;
 using BaronDeskAgent.ServiceCore.Persistence;
@@ -14,7 +15,7 @@ using BaronDeskAgent.ServiceCore.Telemetry;
 using BaronDeskAgent.ServiceCore.Telemetry.Outbox;
 using Microsoft.Extensions.Options;
 
-// Provisioning (--set-station-token / --clear-station-token) runs instead of the agent.
+// Provisioning (--set/--clear-enrollment-token, --set/--clear-station-token) runs instead of the agent.
 if (CredentialCommandLine.TryRun(args, out var exitCode))
 {
     return exitCode;
@@ -35,8 +36,14 @@ services.AddSingleton<DevelopmentDataSeeder>();
 services.AddSingleton<PolicyRepository>();
 services.AddSingleton<IPolicyStore, PolicyStore>();
 
-// Server connection
+// Station identity & enrollment
 services.AddSingleton<IStationCredentialStore, DpapiStationCredentialStore>();
+services.AddSingleton<IEnrollmentTokenStore, DpapiEnrollmentTokenStore>();
+services.AddSingleton<IStationKeyStore, DpapiStationKeyStore>();
+services.AddSingleton<IEnrollmentClient, HttpEnrollmentClient>();
+services.AddSingleton<EnrollmentService>();
+
+// Server connection
 services.AddSingleton<ServerClock>();
 services.AddSingleton<ReplayGuard>();
 services.AddSingleton<IServerConnection, WebSocketConnection>();

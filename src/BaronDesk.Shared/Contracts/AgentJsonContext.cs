@@ -33,4 +33,7 @@ namespace BaronDesk.Shared.Contracts;
 [JsonSerializable(typeof(LaunchGamePayload))]
 [JsonSerializable(typeof(ShutdownPayload))]
 [JsonSerializable(typeof(PolicyUpdatePayload))]
+// Enrollment (REST, before the WSS link exists)
+[JsonSerializable(typeof(EnrollmentRequest))]
+[JsonSerializable(typeof(EnrollmentResponse))]
 public sealed partial class AgentJsonContext : JsonSerializerContext;
