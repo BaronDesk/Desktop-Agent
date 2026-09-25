@@ -17,10 +17,16 @@ public sealed class KeyboardHook : IDisposable
     private const int LlkhfAltDown = 0x20;
     private const int FlagsOffset = 8; // KBDLLHOOKSTRUCT: vkCode, scanCode, flags, …
 
+    private const int WmKeyDown = 0x0100;
+    private const int WmSysKeyDown = 0x0104;
+
     private const int VkTab = 0x09;
+    private const int VkShift = 0x10;
     private const int VkEscape = 0x1B;
     private const int VkControl = 0x11;
+    private const int VkMenu = 0x12;
     private const int VkF4 = 0x73;
+    private const int VkF12 = 0x7B;
     private const int VkLeftWindows = 0x5B;
     private const int VkRightWindows = 0x5C;
 
@@ -58,15 +64,49 @@ public sealed class KeyboardHook : IDisposable
 
     public void Dispose() => Uninstall();
 
+#if DEBUG
+    /// <summary>
+    /// Debug builds only: Ctrl+Alt+Shift+F12 was pressed while the hook is installed. Raised on the hook's
+    /// thread (the UI thread), so handlers must return quickly.
+    /// </summary>
+    public event Action? EmergencyExitRequested;
+#endif
+
     private IntPtr OnKey(int code, IntPtr message, IntPtr data)
     {
-        if (code >= 0 && ShouldBlock(Marshal.ReadInt32(data), Marshal.ReadInt32(data, FlagsOffset)))
+        if (code >= 0)
         {
-            return 1; // Swallow both key-down and key-up.
+            var virtualKey = Marshal.ReadInt32(data);
+            var flags = Marshal.ReadInt32(data, FlagsOffset);
+
+#if DEBUG
+            if (IsEmergencyExit((int)message, virtualKey))
+            {
+                EmergencyExitRequested?.Invoke();
+                return 1;
+            }
+#endif
+
+            if (ShouldBlock(virtualKey, flags))
+            {
+                return 1; // Swallow both key-down and key-up.
+            }
         }
 
         return CallNextHookEx(_hook, code, message, data);
     }
+
+#if DEBUG
+    // Development escape hatch: a kiosk overlay whose service died cannot otherwise be left without signing out.
+    // Compiled out of Release builds, where it would let a gamer end the lock screen.
+    // Alt is read from the key state: Windows leaves LLKHF_ALTDOWN clear while Ctrl is also held.
+    private static bool IsEmergencyExit(int message, int virtualKey) =>
+        message is WmKeyDown or WmSysKeyDown &&
+        virtualKey == VkF12 &&
+        (GetAsyncKeyState(VkControl) & 0x8000) != 0 &&
+        (GetAsyncKeyState(VkMenu) & 0x8000) != 0 &&
+        (GetAsyncKeyState(VkShift) & 0x8000) != 0;
+#endif
 
     private static bool ShouldBlock(int virtualKey, int flags)
     {

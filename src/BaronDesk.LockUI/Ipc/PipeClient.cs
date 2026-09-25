@@ -43,6 +43,12 @@ public sealed class PipeClient
                 // Service not running yet, restarting, or the connection dropped.
                 Trace.TraceWarning($"LockUI pipe: {ex.Message}");
             }
+            catch (Exception ex)
+            {
+                // Nothing else may end this loop: without it the helper stays "service unavailable" for good,
+                // even after the service comes back.
+                Trace.TraceError($"LockUI pipe: unexpected error, reconnecting: {ex}");
+            }
 
             try
             {

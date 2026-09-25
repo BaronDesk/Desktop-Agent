@@ -269,6 +269,7 @@ A normal window titled **"BaronDesk LockUI — TEST MODE — LOCKED"** appears, 
 > The overlay covers every monitor and blocks the Windows key, Alt+Tab and Alt+F4, and **you cannot type in your terminals while it is shown**.
 >
 > - **Normal way out:** type PIN **`1234`** and press Enter (mock and agent must be running).
+> - **Stuck on "Service unavailable"** (the agent stopped, so the PIN box is disabled): press **Ctrl+Alt+Shift+F12**. The LockUI closes. Debug builds only; the combination does nothing in Release.
 > - **Emergency:** press **Ctrl+Alt+Del → Sign out**. Ctrl+Alt+Del cannot be blocked from user mode.
 > - Once it is **unlocked** (hidden), stop it from any terminal: `taskkill /IM BaronDesk.LockUI.exe /F`.
 > - If the agent ran as Administrator and Task Manager stays disabled afterwards, from an **elevated** prompt: `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System /v DisableTaskMgr /f`
@@ -459,7 +460,7 @@ In production the service runs as LocalSystem, which can always read the file.
 | `Hardware sensors are unavailable; telemetry and hardware alerts are disabled.` | Sensor driver blocked (no admin rights, antivirus, HVCI). The rest of the agent keeps working. |
 | Alerts from `t` don't appear | Wait up to 15 s (idle sampling); the alarm fires only once until the temperature drops below threshold − 5 °C |
 | USB alert never fires | Anti-theft may be off in your stored policy: press `a` first. The device must be wired USB HID and present before the agent started, or plugged in while idle. |
-| Stuck on the lock screen | PIN `1234` (mock + agent running), or **Ctrl+Alt+Del → Sign out** |
+| Stuck on the lock screen | PIN `1234` (mock + agent running). If it says "Service unavailable" the agent stopped: **Ctrl+Alt+Shift+F12** closes the LockUI (Debug builds), or **Ctrl+Alt+Del → Sign out** |
 | Agent warns `Task Manager policy could not be applied …` | Expected when the agent runs as a standard user: only LocalSystem / Administrators can write that policy. Run the agent as Administrator to test it. |
 | Task Manager disabled after testing (agent ran as Administrator and was stopped while locked) | From an **elevated** prompt: `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System /v DisableTaskMgr /f` |
 | `--windowed` shows the fullscreen lock screen anyway | You are running a Release build (the flag is ignored there on purpose). Use `dotnet run` (Debug) |

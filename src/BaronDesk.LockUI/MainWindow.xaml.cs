@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
@@ -38,6 +39,9 @@ public partial class MainWindow : Window
     private bool _serverOnline;
     private bool _loginPending;
     private bool _rateLimited;
+#if DEBUG
+    private bool _emergencyExit;
+#endif
 
     /// <param name="windowedTestMode">Debug-only test mode: a normal window, no keyboard hook, no Task Manager policy.</param>
     public MainWindow(bool windowedTestMode)
@@ -61,6 +65,9 @@ public partial class MainWindow : Window
         _client.MessageReceived += message => Dispatcher.BeginInvoke(() => OnMessage(message));
         _client.ConnectionChanged += connected => Dispatcher.BeginInvoke(() => OnConnectionChanged(connected));
 
+#if DEBUG
+        _keyboardHook.EmergencyExitRequested += OnEmergencyExitRequested;
+#endif
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         Deactivated += OnDeactivated;
 
@@ -331,6 +338,19 @@ public partial class MainWindow : Window
             }
         });
 
+#if DEBUG
+    // Debug builds only: leaves the kiosk overlay when no service can unlock it.
+    // Deferred so the keyboard hook callback returns immediately.
+    private void OnEmergencyExitRequested() =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            Trace.TraceWarning("LockUI: emergency exit (Ctrl+Alt+Shift+F12, Debug build).");
+            _emergencyExit = true;
+            _keyboardHook.Uninstall();
+            Application.Current.Shutdown();
+        });
+#endif
+
     private void OnDeactivated(object? sender, EventArgs e)
     {
         if (_isLocked && !_windowedTestMode)
@@ -342,6 +362,14 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
+#if DEBUG
+        if (_emergencyExit)
+        {
+            base.OnClosing(e);
+            return;
+        }
+#endif
+
         if (_isLocked && !_windowedTestMode)
         {
             e.Cancel = true;
