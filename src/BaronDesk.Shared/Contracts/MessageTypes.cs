@@ -1,0 +1,24 @@
+namespace BaronDesk.Shared.Contracts;
+
+/// <summary>
+/// Non-command envelope types. Commands (server → agent) are listed in <see cref="CommandTypes"/>.
+/// </summary>
+public static class MessageTypes
+{
+    // Agent → server (FROZEN)
+    public const string Handshake = "handshake";
+    public const string Heartbeat = "heartbeat";
+    public const string Telemetry = "telemetry";
+    public const string Alert = "alert";
+    public const string CommandAck = "command_ack";
+    public const string CommandNack = "command_nack";
+    public const string StateReport = "state_report";
+
+    // OPEN (skill §15 item 2): the frozen list has no credential-relay message. Proposed shape, confirm with backend member C.
+    public const string LoginRequest = "login_request";
+
+    // Server → agent control frames. OPEN (skill §15 item 3): not in the frozen list yet, confirm with backend member C.
+    public const string HandshakeAck = "handshake_ack";
+    public const string HeartbeatAck = "heartbeat_ack";
+    public const string LoginResult = "login_result";
+}
