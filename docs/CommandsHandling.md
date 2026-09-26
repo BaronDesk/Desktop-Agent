@@ -1,6 +1,6 @@
 # BaronDesk Agent : Command Handling Architecture
 
-This document describes the current implementation and architecture of server command execution in `BaronDeskAgent.ServiceCore`: the allow-list, anti-replay, idempotency, payload validation, the six command handlers and the `command_ack` / `command_nack` replies.
+This document describes the current implementation and architecture of server command execution in `BaronDeskAgent.ServiceCore`: the allow-list, anti-replay, idempotency, payload validation, the seven command handlers and the `command_ack` / `command_nack` replies.
 
 ---
 
@@ -12,7 +12,7 @@ Desktop-Agent
 ├── src
 │   ├── BaronDesk.Shared
 │   │   └── Contracts
-│   │       ├── CommandTypes.cs          (frozen allow-list)
+│   │       ├── CommandTypes.cs          (frozen allow-list + proposed CATALOG_UPDATE)
 │   │       ├── CommandPayloads.cs       (UNLOCK, LOCK, END_SESSION, LAUNCH_GAME, SHUTDOWN)
 │   │       ├── PolicyUpdatePayload.cs   (POLICY_UPDATE)
 │   │       ├── CommandAckPayload.cs
@@ -33,7 +33,8 @@ Desktop-Agent
 │               ├── EndSessionCommandHandler.cs
 │               ├── LaunchGameCommandHandler.cs
 │               ├── ShutdownCommandHandler.cs
-│               └── PolicyUpdateCommandHandler.cs
+│               ├── PolicyUpdateCommandHandler.cs
+│               └── CatalogUpdateCommandHandler.cs
 │
 └── tests
     └── BaronDeskAgent.ServiceCore.Tests
@@ -92,7 +93,7 @@ public sealed class CommandDispatcher
 ```
 
 - Handlers are indexed in a `FrozenDictionary` with `StringComparer.Ordinal`: `"lock"` is not `"LOCK"`.
-- The constructor fails fast if any of the six frozen commands has no registered handler.
+- The constructor fails fast if any allowed command (the six frozen ones plus the proposed `CATALOG_UPDATE`) has no registered handler.
 - Ack/nack sends that fail (connection dropped) are logged, not thrown. The backend redelivers unacknowledged commands, and the outcome store turns a redelivered success into a plain re-ack.
 
 ---
@@ -150,6 +151,7 @@ Handlers **return** expected failures instead of throwing them.
 | `LAUNCH_GAME` | `LaunchGameCommandHandler` | no | `GameService.LaunchAsync` |
 | `SHUTDOWN` | `ShutdownCommandHandler` | no | `StationController.PrepareForShutdownAsync` + `SystemPowerService` |
 | `POLICY_UPDATE` | `PolicyUpdateCommandHandler` | no | `IPolicyStore.UpdatePolicyAsync` |
+| `CATALOG_UPDATE` ⚠ OPEN | `CatalogUpdateCommandHandler` | no | `GameCatalogSyncWorker.RequestSync` (acked once queued; the result follows as `catalog_status`) |
 
 Session, lease and lock semantics are in `SessionAndLeaseControl.md`. Games and power are in `SessionCommandsAndSystem.md`, and policy in `PolicyStore.md`.
 
@@ -180,6 +182,7 @@ CommandPayload.TryParseRequired(payload, AgentJsonContext.Default.LoginResultPay
 | `UNLOCK` | `sessionId` | Required, non-empty GUID (never invented) | `INVALID_PAYLOAD` |
 | `UNLOCK` | `leaseSeconds` / `leaseExpiresAt` | Optional; an already-expired lease is refused | `INVALID_PAYLOAD` |
 | `LAUNCH_GAME` | `gameId` | Required, 1–128 characters, catalog id only | `INVALID_PAYLOAD` |
+| `CATALOG_UPDATE` | any | Ignored: the catalog is pulled over HTTPS (`SessionCommandsAndSystem.md` §2) | — |
 | `SHUTDOWN` | `action` | `"shutdown"` (default) or `"restart"` | `INVALID_PAYLOAD` |
 | `SHUTDOWN` | `delaySeconds` | Integer `0`–`600`, default `2` | `INVALID_PAYLOAD` |
 | `POLICY_UPDATE` | any | At least one known field; unknown fields rejected | `INVALID_PAYLOAD` |
@@ -257,7 +260,7 @@ SHUTDOWN received
 
 | Code | Meaning |
 |---|---|
-| `UNKNOWN_TYPE` | Not one of the six allowed commands |
+| `UNKNOWN_TYPE` | Not one of the allowed commands |
 | `STALE` | Replayed `seq`, or `ts` outside the drift window |
 | `INVALID_PAYLOAD` | Missing/malformed fields |
 | `EXEC_FAILED` | Valid command that could not be carried out (e.g. lock screen did not confirm, game not installed) |
@@ -276,6 +279,7 @@ services.AddSingleton<ICommandHandler, EndSessionCommandHandler>();
 services.AddSingleton<ICommandHandler, LaunchGameCommandHandler>();
 services.AddSingleton<ICommandHandler, ShutdownCommandHandler>();
 services.AddSingleton<ICommandHandler, PolicyUpdateCommandHandler>();
+services.AddSingleton<ICommandHandler, CatalogUpdateCommandHandler>();
 services.AddSingleton<CommandDispatcher>();
 ```
 
@@ -305,7 +309,7 @@ services.AddSingleton<CommandDispatcher>();
 
 ## Current Status
 
-- [x] Case-sensitive allow-list of the six frozen commands
+- [x] Case-sensitive allow-list of the six frozen commands, plus the proposed `CATALOG_UPDATE` (skill §15 item 9)
 - [x] Anti-replay on every command; `LOCK`/`END_SESSION` exempt from freshness only
 - [x] Idempotency: only successes recorded, persisted in SQLite (`HandledCommands`, last 256)
 - [x] Typed, source-generated payloads with strict number parsing and required-field validation

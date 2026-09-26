@@ -54,6 +54,58 @@ public sealed class AgentOptionsValidator : IValidateOptions<AgentOptions>
                 "Provision it with 'BaronDeskAgent.ServiceCore.exe --set-station-token' from an elevated prompt.");
         }
 
+        if (!string.IsNullOrWhiteSpace(options.EnrollmentToken) && !isDevelopment)
+        {
+            errors.Add(
+                "EnrollmentToken must not be stored in configuration outside Development (plain text). " +
+                "Provision it with 'BaronDeskAgent.ServiceCore.exe --set-enrollment-token' from an elevated prompt.");
+        }
+
+        if (serverUri is not null || !string.IsNullOrWhiteSpace(options.EnrollmentUrl))
+        {
+            try
+            {
+                var enrollmentUri = options.ResolveEnrollmentUri();
+                if (enrollmentUri.Scheme != Uri.UriSchemeHttps && !(isDevelopment && enrollmentUri.Scheme == Uri.UriSchemeHttp))
+                {
+                    errors.Add("EnrollmentUrl must use https:// (http:// is only allowed in Development).");
+                }
+            }
+            catch (UriFormatException)
+            {
+                errors.Add($"EnrollmentUrl '{options.EnrollmentUrl}' is not an absolute URI.");
+            }
+        }
+
+        if (serverUri is not null || !string.IsNullOrWhiteSpace(options.GameCatalogUrl))
+        {
+            try
+            {
+                var catalogUri = options.ResolveGameCatalogUri();
+                if (catalogUri.Scheme != Uri.UriSchemeHttps && !(isDevelopment && catalogUri.Scheme == Uri.UriSchemeHttp))
+                {
+                    errors.Add("GameCatalogUrl must use https:// (http:// is only allowed in Development).");
+                }
+            }
+            catch (UriFormatException)
+            {
+                errors.Add($"GameCatalogUrl '{options.GameCatalogUrl}' is not an absolute URI.");
+            }
+        }
+
+        foreach (var directory in options.AllowedGameDirectories ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
+            {
+                errors.Add($"AllowedGameDirectories entry '{directory}' must be a fully qualified folder path.");
+            }
+        }
+
+        if (options.EnrollmentPollSeconds is not (>= 1 and <= 3600))
+        {
+            errors.Add("EnrollmentPollSeconds must be in [1, 3600].");
+        }
+
         if (options.ReconnectBaseDelaySeconds is not (> 0 and <= 300))
         {
             errors.Add("ReconnectBaseDelaySeconds must be in (0, 300].");

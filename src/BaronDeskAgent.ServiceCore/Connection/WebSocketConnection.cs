@@ -1,7 +1,6 @@
 using System.Buffers;
+using System.Net.Security;
 using System.Net.WebSockets;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using BaronDesk.Shared.Contracts;
@@ -21,7 +20,7 @@ public sealed class WebSocketConnection : IServerConnection, IDisposable
     private readonly AgentOptions _options;
     private readonly IStationCredentialStore _credentials;
     private readonly Uri _serverUri;
-    private readonly byte[]? _pinnedCertificateHash;
+    private readonly RemoteCertificateValidationCallback? _certificateValidation;
     private readonly ServerClock _serverClock;
     private readonly ILogger<WebSocketConnection> _logger;
 
@@ -47,12 +46,12 @@ public sealed class WebSocketConnection : IServerConnection, IDisposable
         _options = options.Value;
         _credentials = credentials;
         _serverUri = new Uri(_options.ServerUrl);
-        _pinnedCertificateHash = _options.GetPinnedCertificateHash();
+        _certificateValidation = CertificatePinning.CreateCallback(_options, logger);
         _serverClock = serverClock;
         _logger = logger;
         _jsonWriter = new Utf8JsonWriter(_sendBuffer);
 
-        if (_pinnedCertificateHash is null && _options.AllowUntrustedCertificate)
+        if (_options.GetPinnedCertificateHash() is null && _options.AllowUntrustedCertificate)
         {
             _logger.LogWarning("AllowUntrustedCertificate is on: server certificates are NOT validated (Development only).");
         }
@@ -268,15 +267,8 @@ public sealed class WebSocketConnection : IServerConnection, IDisposable
         var socket = new ClientWebSocket();
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(_options.KeepAliveIntervalSeconds);
 
-        if (_pinnedCertificateHash is { } pin)
-        {
-            // Runs during the TLS handshake, before the HTTP upgrade: on mismatch no credential is ever sent.
-            socket.Options.RemoteCertificateValidationCallback = (_, certificate, _, _) => IsPinnedCertificate(certificate, pin);
-        }
-        else if (_options.AllowUntrustedCertificate)
-        {
-            socket.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
-        }
+        // Runs during the TLS handshake, before the HTTP upgrade: on a pin mismatch no credential is ever sent.
+        socket.Options.RemoteCertificateValidationCallback = _certificateValidation;
 
         // Read on every connect so a rotated credential is used without a restart. The configuration value is a
         // Development-only fallback (rejected at startup elsewhere).
@@ -291,27 +283,6 @@ public sealed class WebSocketConnection : IServerConnection, IDisposable
         }
 
         return socket;
-    }
-
-    private bool IsPinnedCertificate(X509Certificate? certificate, byte[] pin)
-    {
-        if (certificate is null)
-        {
-            _logger.LogCritical("The server presented no certificate. Aborting the connection.");
-            return false;
-        }
-
-        var actual = SHA256.HashData(certificate.GetRawCertData());
-        if (CryptographicOperations.FixedTimeEquals(actual, pin))
-        {
-            return true;
-        }
-
-        _logger.LogCritical(
-            "Certificate pinning mismatch (expected {Expected}, got {Actual}). Aborting the connection.",
-            Convert.ToHexString(pin),
-            Convert.ToHexString(actual));
-        return false;
     }
 
     private void SetReady(bool ready)

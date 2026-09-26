@@ -5,6 +5,11 @@
 //   MOCK_TLS_CERT=cert.pem MOCK_TLS_KEY=key.pem node mock-server.js
 // then copy the printed SHA-256 fingerprint into Agent:PinnedCertificateHash.
 //
+// Enrollment: POST /enrollment/request answers PENDING until you press [e] (approve) or [x] (reject).
+// Hands-free: MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS=5 node mock-server.js approves every new station after 5 s.
+//
+// Game catalog: GET /stations/me/games serves MOCK_CATALOG; the agent pulls it on connect and after [c] CATALOG_UPDATE.
+//
 // Login relay: typing PIN 1234 on the lock screen is accepted (login_result + UNLOCK); anything else is rejected.
 //
 // Hands-free lock screen testing: MOCK_AUTO_RELOCK_SECONDS=20 node mock-server.js
@@ -18,16 +23,34 @@ const readline = require('readline');
 
 const PORT = 8443;
 const WS_PATH = '/agent-ws';
+const ENROLLMENT_PATH = '/enrollment/request';
+const CATALOG_PATH = '/stations/me/games';
+const SYSTEM32 = `${process.env.SystemRoot || 'C:\\Windows'}\\System32`;
+
+// Sample catalog, as the backend would resolve it for this machine.
+const MOCK_CATALOG = [
+    // Character Map: a classic single-process exe that holds no user data (Windows 11 Notepad is a stub and restores your documents).
+    { gameId: 'charmap', name: 'Character Map (test game)', launchType: 'exe', target: `${SYSTEM32}\\charmap.exe` },
+    // Windows 11: calc.exe is a stub that starts CalculatorApp and exits, like a game bootstrapper.
+    { gameId: 'calc', name: 'Calculator (bootstrapper test)', launchType: 'exe', target: `${SYSTEM32}\\calc.exe`, processName: 'CalculatorApp.exe' },
+    { gameId: 'cs2', name: 'Counter-Strike 2', launchType: 'steam', target: '730', arguments: '-novid', processName: 'cs2.exe' },
+    { gameId: 'fortnite', name: 'Fortnite', launchType: 'epic', target: 'Fortnite', processName: 'FortniteClient-Win64-Shipping.exe' },
+    { gameId: 'missing', name: 'Not installed here', launchType: 'exe', target: 'D:\\Games\\Missing\\missing.exe' },
+    { gameId: 'invalid', name: 'Invalid entry', launchType: 'exe', target: 'relative\\game.exe' }
+];
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const ACCEPTED_PIN = '1234';
 const LEASE_SECONDS = 60;
 
 const AUTO_RELOCK_SECONDS = Number(process.env.MOCK_AUTO_RELOCK_SECONDS) || 0;
+const AUTO_APPROVE_ENROLLMENT_SECONDS = Number(process.env.MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS) || 0;
 
 let activeSocket = null;
 let serverSequence = 100;
 let currentSessionId = null;
 const pendingUnlockIds = new Set();
+const enrollments = new Map(); // serialNumber -> { publicKey, status, machineId?, stationToken? }
+let pendingEnrollmentSerial = null;
 
 function sendUnlock() {
     currentSessionId = crypto.randomUUID();
@@ -46,9 +69,123 @@ const tlsKey = process.env.MOCK_TLS_KEY;
 const useTls = Boolean(tlsCert && tlsKey);
 
 const requestHandler = (req, res) => {
+    if (req.method === 'POST' && req.url === ENROLLMENT_PATH) {
+        handleEnrollmentRequest(req, res);
+        return;
+    }
+
+    if (req.method === 'GET' && req.url === CATALOG_PATH) {
+        handleCatalogRequest(req, res);
+        return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('BaronDesk Mock Server running. Connect over WebSocket to ' + WS_PATH);
 };
+
+// -------------------------------------------------------------
+// Game catalog (GET /stations/me/games) - pulled by the agent on every connect and after CATALOG_UPDATE
+// -------------------------------------------------------------
+// The real backend resolves Game + MachineGame (per-machine overrides) for the station in the JWT.
+function handleCatalogRequest(req, res) {
+    const hasToken = /^Bearer \S+/.test(req.headers.authorization || '');
+    console.log(`\n\x1b[35m[CATALOG]\x1b[0m GET ${CATALOG_PATH} (station credential: ${hasToken ? 'present' : 'MISSING'})`);
+    if (!hasToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ reason: 'station credential required' }));
+        return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ games: MOCK_CATALOG }));
+}
+
+// -------------------------------------------------------------
+// Enrollment (POST /enrollment/request) - the station's first contact
+// -------------------------------------------------------------
+// The agent re-posts the same signed request while PENDING. Like the real backend should, the mock:
+//   - verifies the ECDSA signature against the public key in the request (proof of possession),
+//   - pins the public key recorded on the first request (a later request with another key is refused),
+//   - only releases the station token after approval ([e] in the menu; [x] rejects).
+function handleEnrollmentRequest(req, res) {
+    let body = '';
+    req.on('data', (chunk) => {
+        body += chunk;
+        if (body.length > 64 * 1024) req.destroy();
+    });
+    req.on('end', () => {
+        const reply = (status, json) => {
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(json));
+        };
+
+        let request;
+        try {
+            request = JSON.parse(body);
+        } catch {
+            return reply(400, { status: 'REJECTED', reason: 'invalid JSON' });
+        }
+
+        const signingInput = ['BARONDESK-ENROLL-V1', request.oneTimeToken, request.serialNumber, request.mac,
+            request.ip, request.agentPublicKey, request.signedAt].join('\n');
+        let signatureValid = false;
+        try {
+            const publicKey = crypto.createPublicKey({ key: Buffer.from(request.agentPublicKey, 'base64'), format: 'der', type: 'spki' });
+            signatureValid = crypto.verify('sha256', Buffer.from(signingInput, 'utf8'), publicKey, Buffer.from(request.signature, 'base64'));
+        } catch {
+            signatureValid = false;
+        }
+
+        const serial = request.serialNumber;
+        let enrollment = enrollments.get(serial);
+        console.log(`\n\x1b[35m[ENROLLMENT]\x1b[0m serial=${serial} mac=${request.mac} ip=${request.ip} ` +
+            `token=${request.oneTimeToken ? '(present, hidden)' : '(missing)'} signature=${signatureValid ? 'VALID' : 'INVALID'}`);
+
+        if (!signatureValid || !request.oneTimeToken) {
+            return reply(403, { status: 'REJECTED', reason: 'invalid signature or token' });
+        }
+
+        if (!enrollment) {
+            enrollment = { publicKey: request.agentPublicKey, status: 'PENDING' };
+            enrollments.set(serial, enrollment);
+            pendingEnrollmentSerial = serial;
+            console.log(`\x1b[33m[ENROLLMENT]\x1b[0m New station ${serial} is PENDING. Press [e] to approve or [x] to reject.`);
+            if (AUTO_APPROVE_ENROLLMENT_SECONDS > 0) {
+                setTimeout(() => decideEnrollment(true), AUTO_APPROVE_ENROLLMENT_SECONDS * 1000);
+            }
+        } else if (enrollment.publicKey !== request.agentPublicKey) {
+            console.log('\x1b[31m[ENROLLMENT]\x1b[0m Public key differs from the first request: refused.');
+            return reply(403, { status: 'REJECTED', reason: 'station key mismatch' });
+        }
+
+        if (enrollment.status === 'ENROLLED') {
+            console.log(`\x1b[32m[ENROLLMENT]\x1b[0m Issuing the station token to ${serial}.`);
+            return reply(200, { status: 'ENROLLED', machineId: enrollment.machineId, stationToken: enrollment.stationToken });
+        }
+
+        return reply(200, { status: enrollment.status, reason: enrollment.status === 'REJECTED' ? 'declined by admin' : undefined });
+    });
+}
+
+function decideEnrollment(approve) {
+    const enrollment = pendingEnrollmentSerial && enrollments.get(pendingEnrollmentSerial);
+    if (!enrollment || enrollment.status !== 'PENDING') {
+        console.log('\x1b[33m[WARN]\x1b[0m No pending enrollment.');
+        return;
+    }
+
+    if (approve) {
+        enrollment.status = 'ENROLLED';
+        enrollment.machineId = crypto.randomUUID();
+        // Fake station JWT (unsigned mock value), handed out on the agent's next poll.
+        const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+        enrollment.stationToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: enrollment.machineId, serial: pendingEnrollmentSerial })}.mock`;
+    } else {
+        enrollment.status = 'REJECTED';
+    }
+
+    console.log(`\n\x1b[36m[ENROLLMENT]\x1b[0m ${pendingEnrollmentSerial} -> ${enrollment.status} (delivered on the agent's next poll).`);
+}
 
 const server = useTls
     ? https.createServer({ cert: fs.readFileSync(tlsCert), key: fs.readFileSync(tlsKey) }, requestHandler)
@@ -286,6 +423,13 @@ function handleTextMessage(text, socket) {
             samples.forEach(s => {
                 console.log(`   • \x1b[36m${s.metric.padEnd(30)}\x1b[0m : \x1b[32m\x1b[1m${s.value}\x1b[0m`);
             });
+        } else if (type === 'catalog_status') {
+            const games = env.payload?.games || [];
+            console.log(`\x1b[36m[CATALOG_STATUS]\x1b[0m ${games.filter(g => g.installed).length}/${games.length} game(s) launchable on this station:`);
+            games.forEach(g => {
+                const state = g.installed ? '\x1b[32minstalled\x1b[0m' : `\x1b[31mnot launchable\x1b[0m (${g.reason})`;
+                console.log(`   • \x1b[1m${String(g.gameId).padEnd(10)}\x1b[0m ${state}`);
+            });
         } else if (type === 'alert') {
             const a = env.payload || {};
             console.log(`\x1b[31m[ALERT]\x1b[0m ${a.category} / ${a.type} / ${a.severity}: ${a.detail}`);
@@ -306,7 +450,10 @@ function printMenu() {
     console.log('----------------------------------------');
     console.log(' [1] Send LOCK');
     console.log(` [2] Send UNLOCK (starts a session, ${LEASE_SECONDS}s lease)`);
-    console.log(' [3] Send LAUNCH_GAME (gameId: "notepad", seeded in Development)');
+    console.log(' [3] Send LAUNCH_GAME (gameId: "charmap", Character Map)');
+    console.log(' [l] Send LAUNCH_GAME (gameId: "calc", tracked by processName after its stub exits)');
+    console.log(' [s] Send LAUNCH_GAME (gameId: "cs2", Steam; NACK unless CS2 is installed)');
+    console.log(' [c] Send CATALOG_UPDATE (agent re-downloads the catalog, answers with catalog_status)');
     console.log(' [4] Send END_SESSION (ends the current session)');
     console.log(' [5] Send POLICY_UPDATE');
     console.log(' [6] Send SHUTDOWN');
@@ -319,6 +466,8 @@ function printMenu() {
     console.log(' [a] POLICY_UPDATE: enable USB anti-theft alerts (5s debounce)');
     console.log(' [t] POLICY_UPDATE: temperature thresholds 30°C (expect TEMPERATURE_WARNING alerts)');
     console.log(' [r] POLICY_UPDATE: restore default thresholds (85°C)');
+    console.log(' [e] Approve the pending enrollment (station token issued on the next poll)');
+    console.log(' [x] Reject the pending enrollment');
     console.log(' [q] Quit');
     console.log(` Lock-screen PIN accepted by this mock: ${ACCEPTED_PIN}`);
     console.log('----------------------------------------');
@@ -339,7 +488,16 @@ rl.on('line', (line) => {
             sendUnlock();
             break;
         case '3':
-            sendEnvelope('LAUNCH_GAME', { gameId: 'notepad' });
+            sendEnvelope('LAUNCH_GAME', { gameId: 'charmap' });
+            break;
+        case 'l':
+            sendEnvelope('LAUNCH_GAME', { gameId: 'calc' });
+            break;
+        case 's':
+            sendEnvelope('LAUNCH_GAME', { gameId: 'cs2' });
+            break;
+        case 'c':
+            sendEnvelope('CATALOG_UPDATE', {});
             break;
         case '4':
             sendEnvelope('END_SESSION', { sessionId: currentSessionId, reason: 'user_logout' });
@@ -382,6 +540,12 @@ rl.on('line', (line) => {
                 sendFrame(activeSocket, 0x01, '{ "type": "LOCK", "this is not": valid json');
                 console.log('\nSent a malformed frame.');
             }
+            break;
+        case 'e':
+            decideEnrollment(true);
+            break;
+        case 'x':
+            decideEnrollment(false);
             break;
         case 'q':
             console.log('Exiting mock server...');

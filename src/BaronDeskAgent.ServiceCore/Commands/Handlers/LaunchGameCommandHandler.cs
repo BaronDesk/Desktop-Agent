@@ -5,8 +5,8 @@ using BaronDeskAgent.ServiceCore.Session;
 namespace BaronDeskAgent.ServiceCore.Commands.Handlers;
 
 /// <summary>
-/// LAUNCH_GAME: resolve the id in the local catalog and start it in the gamer's session.
-/// Only catalog entries are ever executed, never a path from the payload.
+/// LAUNCH_GAME: resolve the id in the local catalog and start it in the gamer's session (directly, or through
+/// Steam / the Epic Games Launcher). Only catalog entries are ever executed, never a path from the payload.
 /// </summary>
 public sealed class LaunchGameCommandHandler : ICommandHandler
 {
@@ -50,6 +50,10 @@ public sealed class LaunchGameCommandHandler : ICommandHandler
             return CommandResult.Success();
         }
         catch (GameNotFoundException ex)
+        {
+            return CommandResult.Failed(ex.Message);
+        }
+        catch (GameNotInstalledException ex)
         {
             return CommandResult.Failed(ex.Message);
         }

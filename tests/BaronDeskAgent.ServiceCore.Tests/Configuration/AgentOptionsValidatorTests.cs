@@ -35,6 +35,53 @@ public sealed class AgentOptionsValidatorTests
     }
 
     [Fact]
+    public void A_plain_text_enrollment_token_is_development_only()
+    {
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, EnrollmentToken = "enroll-1" }).Failed);
+        Assert.True(Validate(Environments.Development, new AgentOptions { EnrollmentToken = "enroll-1" }).Succeeded);
+    }
+
+    [Fact]
+    public void Production_rejects_plain_http_enrollment()
+    {
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, EnrollmentUrl = "http://10.0.0.1/enrollment/request" }).Failed);
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, EnrollmentUrl = "https://10.0.0.1/enrollment/request" }).Succeeded);
+    }
+
+    [Theory]
+    [InlineData("wss://192.168.1.100:8443/agent-ws", "https://192.168.1.100:8443/stations/me/games")]
+    [InlineData("wss://server.local/agent-ws", "https://server.local/stations/me/games")]
+    [InlineData("ws://127.0.0.1:8443/agent-ws", "http://127.0.0.1:8443/stations/me/games")]
+    public void The_game_catalog_endpoint_defaults_to_the_server_host(string serverUrl, string expected)
+    {
+        Assert.Equal(new Uri(expected), new AgentOptions { ServerUrl = serverUrl }.ResolveGameCatalogUri());
+    }
+
+    [Fact]
+    public void Production_rejects_a_plain_http_game_catalog()
+    {
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, GameCatalogUrl = "http://10.0.0.1/stations/me/games" }).Failed);
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, GameCatalogUrl = "https://10.0.0.1/stations/me/games" }).Succeeded);
+    }
+
+    [Fact]
+    public void Allowed_game_directories_must_be_fully_qualified()
+    {
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, AllowedGameDirectories = [@"D:\Games", @"\\nas\games"] }).Succeeded);
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, AllowedGameDirectories = ["Games"] }).Failed);
+        Assert.True(Validate(Environments.Production, new AgentOptions { PinnedCertificateHash = Pin, AllowedGameDirectories = [""] }).Failed);
+    }
+
+    [Theory]
+    [InlineData("wss://192.168.1.100:8443/agent-ws", "https://192.168.1.100:8443/enrollment/request")]
+    [InlineData("wss://server.local/agent-ws", "https://server.local/enrollment/request")]
+    [InlineData("ws://127.0.0.1:8443/agent-ws", "http://127.0.0.1:8443/enrollment/request")]
+    public void The_enrollment_endpoint_defaults_to_the_server_host(string serverUrl, string expected)
+    {
+        Assert.Equal(new Uri(expected), new AgentOptions { ServerUrl = serverUrl }.ResolveEnrollmentUri());
+    }
+
+    [Fact]
     public void A_malformed_pin_is_rejected_at_startup()
     {
         Assert.True(Validate(Environments.Development, new AgentOptions { PinnedCertificateHash = "not-hex" }).Failed);

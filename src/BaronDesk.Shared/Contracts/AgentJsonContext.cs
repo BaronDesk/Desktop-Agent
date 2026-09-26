@@ -22,6 +22,7 @@ namespace BaronDesk.Shared.Contracts;
 [JsonSerializable(typeof(CommandAckPayload))]
 [JsonSerializable(typeof(CommandNackPayload))]
 [JsonSerializable(typeof(LoginRequestPayload))]
+[JsonSerializable(typeof(CatalogStatusPayload))]
 // Server → agent control frames
 [JsonSerializable(typeof(HandshakeAckPayload))]
 [JsonSerializable(typeof(HeartbeatAckPayload))]
@@ -33,4 +34,9 @@ namespace BaronDesk.Shared.Contracts;
 [JsonSerializable(typeof(LaunchGamePayload))]
 [JsonSerializable(typeof(ShutdownPayload))]
 [JsonSerializable(typeof(PolicyUpdatePayload))]
+// Enrollment (REST, before the WSS link exists)
+[JsonSerializable(typeof(EnrollmentRequest))]
+[JsonSerializable(typeof(EnrollmentResponse))]
+// Game catalog (REST, pulled with the station credential)
+[JsonSerializable(typeof(GameCatalogResponse))]
 public sealed partial class AgentJsonContext : JsonSerializerContext;

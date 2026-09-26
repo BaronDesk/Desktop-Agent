@@ -15,4 +15,10 @@ public static class AgentPaths
 
     /// <summary>The station credential, encrypted with DPAPI (LocalMachine). Never stored in SQLite.</summary>
     public static string CredentialFile { get; } = Path.Combine(DataDirectory, "station.credential");
+
+    /// <summary>The one-time enrollment token, encrypted with DPAPI (LocalMachine). Deleted once enrollment ends.</summary>
+    public static string EnrollmentTokenFile { get; } = Path.Combine(DataDirectory, "enrollment.token");
+
+    /// <summary>The station's ECDSA private key (PKCS#8), encrypted with DPAPI (LocalMachine). Never leaves the station.</summary>
+    public static string StationKeyFile { get; } = Path.Combine(DataDirectory, "station.key");
 }
