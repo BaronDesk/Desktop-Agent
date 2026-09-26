@@ -46,6 +46,18 @@ public sealed class AgentOptions
     /// <summary>How often a <c>PENDING</c> enrollment asks again whether an admin approved the station.</summary>
     public double EnrollmentPollSeconds { get; set; } = 15.0;
 
+    /// <summary>
+    /// Game catalog endpoint. Defaults to <c>GET /stations/me/games</c> on the <see cref="ServerUrl"/> host
+    /// (<c>wss</c> → <c>https</c>), protected by the same certificate pin and sent with the station credential.
+    /// </summary>
+    public string? GameCatalogUrl { get; set; }
+
+    /// <summary>
+    /// Optional hardening: when set, <c>exe</c> catalog entries only launch from inside these folders
+    /// (e.g. <c>D:\Games</c>). Empty means any folder. Steam and Epic games are started through their launcher.
+    /// </summary>
+    public string[] AllowedGameDirectories { get; set; } = [];
+
     /// <summary>Full path of <c>BaronDesk.LockUI.exe</c>. When set, only that executable may use the IPC pipe and the service relaunches it if it dies.</summary>
     public string? LockUiExecutablePath { get; set; }
 
@@ -62,18 +74,24 @@ public sealed class AgentOptions
         string.IsNullOrWhiteSpace(SerialNumber) ? Environment.MachineName : SerialNumber.Trim();
 
     /// <exception cref="UriFormatException">The configured or derived URL is not an absolute URI.</exception>
-    public Uri ResolveEnrollmentUri()
+    public Uri ResolveEnrollmentUri() => ResolveHttpUri(EnrollmentUrl, "/enrollment/request");
+
+    /// <exception cref="UriFormatException">The configured or derived URL is not an absolute URI.</exception>
+    public Uri ResolveGameCatalogUri() => ResolveHttpUri(GameCatalogUrl, "/stations/me/games");
+
+    /// <summary>The configured URL, or <paramref name="path"/> on the <see cref="ServerUrl"/> host (<c>wss</c> → <c>https</c>).</summary>
+    private Uri ResolveHttpUri(string? configuredUrl, string path)
     {
-        if (!string.IsNullOrWhiteSpace(EnrollmentUrl))
+        if (!string.IsNullOrWhiteSpace(configuredUrl))
         {
-            return new Uri(EnrollmentUrl, UriKind.Absolute);
+            return new Uri(configuredUrl, UriKind.Absolute);
         }
 
         var server = new Uri(ServerUrl, UriKind.Absolute);
         var builder = new UriBuilder(server)
         {
             Scheme = server.Scheme == "ws" ? Uri.UriSchemeHttp : Uri.UriSchemeHttps,
-            Path = "/enrollment/request",
+            Path = path,
             Query = string.Empty
         };
 

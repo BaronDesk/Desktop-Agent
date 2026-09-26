@@ -8,6 +8,8 @@
 // Enrollment: POST /enrollment/request answers PENDING until you press [e] (approve) or [x] (reject).
 // Hands-free: MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS=5 node mock-server.js approves every new station after 5 s.
 //
+// Game catalog: GET /stations/me/games serves MOCK_CATALOG; the agent pulls it on connect and after [c] CATALOG_UPDATE.
+//
 // Login relay: typing PIN 1234 on the lock screen is accepted (login_result + UNLOCK); anything else is rejected.
 //
 // Hands-free lock screen testing: MOCK_AUTO_RELOCK_SECONDS=20 node mock-server.js
@@ -22,6 +24,20 @@ const readline = require('readline');
 const PORT = 8443;
 const WS_PATH = '/agent-ws';
 const ENROLLMENT_PATH = '/enrollment/request';
+const CATALOG_PATH = '/stations/me/games';
+const SYSTEM32 = `${process.env.SystemRoot || 'C:\\Windows'}\\System32`;
+
+// Sample catalog, as the backend would resolve it for this machine.
+const MOCK_CATALOG = [
+    // Character Map: a classic single-process exe that holds no user data (Windows 11 Notepad is a stub and restores your documents).
+    { gameId: 'charmap', name: 'Character Map (test game)', launchType: 'exe', target: `${SYSTEM32}\\charmap.exe` },
+    // Windows 11: calc.exe is a stub that starts CalculatorApp and exits, like a game bootstrapper.
+    { gameId: 'calc', name: 'Calculator (bootstrapper test)', launchType: 'exe', target: `${SYSTEM32}\\calc.exe`, processName: 'CalculatorApp.exe' },
+    { gameId: 'cs2', name: 'Counter-Strike 2', launchType: 'steam', target: '730', arguments: '-novid', processName: 'cs2.exe' },
+    { gameId: 'fortnite', name: 'Fortnite', launchType: 'epic', target: 'Fortnite', processName: 'FortniteClient-Win64-Shipping.exe' },
+    { gameId: 'missing', name: 'Not installed here', launchType: 'exe', target: 'D:\\Games\\Missing\\missing.exe' },
+    { gameId: 'invalid', name: 'Invalid entry', launchType: 'exe', target: 'relative\\game.exe' }
+];
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const ACCEPTED_PIN = '1234';
 const LEASE_SECONDS = 60;
@@ -58,9 +74,31 @@ const requestHandler = (req, res) => {
         return;
     }
 
+    if (req.method === 'GET' && req.url === CATALOG_PATH) {
+        handleCatalogRequest(req, res);
+        return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('BaronDesk Mock Server running. Connect over WebSocket to ' + WS_PATH);
 };
+
+// -------------------------------------------------------------
+// Game catalog (GET /stations/me/games) - pulled by the agent on every connect and after CATALOG_UPDATE
+// -------------------------------------------------------------
+// The real backend resolves Game + MachineGame (per-machine overrides) for the station in the JWT.
+function handleCatalogRequest(req, res) {
+    const hasToken = /^Bearer \S+/.test(req.headers.authorization || '');
+    console.log(`\n\x1b[35m[CATALOG]\x1b[0m GET ${CATALOG_PATH} (station credential: ${hasToken ? 'present' : 'MISSING'})`);
+    if (!hasToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ reason: 'station credential required' }));
+        return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ games: MOCK_CATALOG }));
+}
 
 // -------------------------------------------------------------
 // Enrollment (POST /enrollment/request) - the station's first contact
@@ -385,6 +423,13 @@ function handleTextMessage(text, socket) {
             samples.forEach(s => {
                 console.log(`   • \x1b[36m${s.metric.padEnd(30)}\x1b[0m : \x1b[32m\x1b[1m${s.value}\x1b[0m`);
             });
+        } else if (type === 'catalog_status') {
+            const games = env.payload?.games || [];
+            console.log(`\x1b[36m[CATALOG_STATUS]\x1b[0m ${games.filter(g => g.installed).length}/${games.length} game(s) launchable on this station:`);
+            games.forEach(g => {
+                const state = g.installed ? '\x1b[32minstalled\x1b[0m' : `\x1b[31mnot launchable\x1b[0m (${g.reason})`;
+                console.log(`   • \x1b[1m${String(g.gameId).padEnd(10)}\x1b[0m ${state}`);
+            });
         } else if (type === 'alert') {
             const a = env.payload || {};
             console.log(`\x1b[31m[ALERT]\x1b[0m ${a.category} / ${a.type} / ${a.severity}: ${a.detail}`);
@@ -405,7 +450,10 @@ function printMenu() {
     console.log('----------------------------------------');
     console.log(' [1] Send LOCK');
     console.log(` [2] Send UNLOCK (starts a session, ${LEASE_SECONDS}s lease)`);
-    console.log(' [3] Send LAUNCH_GAME (gameId: "notepad", seeded in Development)');
+    console.log(' [3] Send LAUNCH_GAME (gameId: "charmap", Character Map)');
+    console.log(' [l] Send LAUNCH_GAME (gameId: "calc", tracked by processName after its stub exits)');
+    console.log(' [s] Send LAUNCH_GAME (gameId: "cs2", Steam; NACK unless CS2 is installed)');
+    console.log(' [c] Send CATALOG_UPDATE (agent re-downloads the catalog, answers with catalog_status)');
     console.log(' [4] Send END_SESSION (ends the current session)');
     console.log(' [5] Send POLICY_UPDATE');
     console.log(' [6] Send SHUTDOWN');
@@ -440,7 +488,16 @@ rl.on('line', (line) => {
             sendUnlock();
             break;
         case '3':
-            sendEnvelope('LAUNCH_GAME', { gameId: 'notepad' });
+            sendEnvelope('LAUNCH_GAME', { gameId: 'charmap' });
+            break;
+        case 'l':
+            sendEnvelope('LAUNCH_GAME', { gameId: 'calc' });
+            break;
+        case 's':
+            sendEnvelope('LAUNCH_GAME', { gameId: 'cs2' });
+            break;
+        case 'c':
+            sendEnvelope('CATALOG_UPDATE', {});
             break;
         case '4':
             sendEnvelope('END_SESSION', { sessionId: currentSessionId, reason: 'user_logout' });

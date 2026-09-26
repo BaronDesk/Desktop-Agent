@@ -21,20 +21,7 @@ public sealed class HttpEnrollmentClient : IEnrollmentClient, IDisposable
     public HttpEnrollmentClient(IOptions<AgentOptions> options, ILogger<HttpEnrollmentClient> logger)
     {
         Endpoint = options.Value.ResolveEnrollmentUri();
-
-        var handler = new SocketsHttpHandler
-        {
-            // LAN only: never route the token through a proxy or follow a redirect away from the pinned server.
-            UseProxy = false,
-            AllowAutoRedirect = false,
-            SslOptions = { RemoteCertificateValidationCallback = CertificatePinning.CreateCallback(options.Value, logger) }
-        };
-
-        _http = new HttpClient(handler)
-        {
-            Timeout = RequestTimeout,
-            MaxResponseContentBufferSize = 64 * 1024
-        };
+        _http = PinnedHttpClient.Create(options.Value, logger, RequestTimeout, maxResponseBytes: 64 * 1024);
     }
 
     public Uri Endpoint { get; }

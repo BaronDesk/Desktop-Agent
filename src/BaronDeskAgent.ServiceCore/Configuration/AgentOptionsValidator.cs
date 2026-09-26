@@ -77,6 +77,30 @@ public sealed class AgentOptionsValidator : IValidateOptions<AgentOptions>
             }
         }
 
+        if (serverUri is not null || !string.IsNullOrWhiteSpace(options.GameCatalogUrl))
+        {
+            try
+            {
+                var catalogUri = options.ResolveGameCatalogUri();
+                if (catalogUri.Scheme != Uri.UriSchemeHttps && !(isDevelopment && catalogUri.Scheme == Uri.UriSchemeHttp))
+                {
+                    errors.Add("GameCatalogUrl must use https:// (http:// is only allowed in Development).");
+                }
+            }
+            catch (UriFormatException)
+            {
+                errors.Add($"GameCatalogUrl '{options.GameCatalogUrl}' is not an absolute URI.");
+            }
+        }
+
+        foreach (var directory in options.AllowedGameDirectories ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Path.IsPathFullyQualified(directory))
+            {
+                errors.Add($"AllowedGameDirectories entry '{directory}' must be a fully qualified folder path.");
+            }
+        }
+
         if (options.EnrollmentPollSeconds is not (>= 1 and <= 3600))
         {
             errors.Add("EnrollmentPollSeconds must be in [1, 3600].");

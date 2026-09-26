@@ -59,6 +59,11 @@ services.AddSingleton<LoginRelay>();
 
 // Games & power
 services.AddSingleton<GameCatalogRepository>();
+services.AddSingleton<IGameCatalogClient, HttpGameCatalogClient>();
+services.AddSingleton<IGameLibraryLocator, WindowsGameLibraryLocator>();
+services.AddSingleton<GameLaunchResolver>();
+services.AddSingleton<GameCatalogService>();
+services.AddSingleton<GameCatalogSyncWorker>();
 services.AddSingleton<InteractiveProcessLauncher>();
 services.AddSingleton<GameService>();
 services.AddSingleton<SystemPowerService>();
@@ -71,6 +76,7 @@ services.AddSingleton<ICommandHandler, EndSessionCommandHandler>();
 services.AddSingleton<ICommandHandler, LaunchGameCommandHandler>();
 services.AddSingleton<ICommandHandler, ShutdownCommandHandler>();
 services.AddSingleton<ICommandHandler, PolicyUpdateCommandHandler>();
+services.AddSingleton<ICommandHandler, CatalogUpdateCommandHandler>();
 services.AddSingleton<CommandDispatcher>();
 
 // Telemetry & outbox
@@ -87,6 +93,7 @@ services.AddHostedService(provider => provider.GetRequiredService<PipeServer>())
 services.AddHostedService<ConnectionWorker>();
 services.AddHostedService<HeartbeatWorker>();
 services.AddHostedService<OutboxWorker>();
+services.AddHostedService(provider => provider.GetRequiredService<GameCatalogSyncWorker>());
 services.AddHostedService<HardwareMonitorService>();
 services.AddHostedService<UsbMonitorService>();
 

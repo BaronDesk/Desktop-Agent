@@ -17,6 +17,9 @@ public static class MessageTypes
     // OPEN (skill §15 item 2): the frozen list has no credential-relay message. Proposed shape, confirm with backend member C.
     public const string LoginRequest = "login_request";
 
+    // OPEN (skill §15 item 9): catalog install status, confirm with backend member C (see GameCatalogContracts).
+    public const string CatalogStatus = "catalog_status";
+
     // Server → agent control frames. OPEN (skill §15 item 3): not in the frozen list yet, confirm with backend member C.
     public const string HandshakeAck = "handshake_ack";
     public const string HeartbeatAck = "heartbeat_ack";

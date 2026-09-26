@@ -78,18 +78,18 @@ dotnet test BaronDeskAgent.slnx
 La génération a réussi. / Build succeeded.
     0 Warning(s)
     0 Error(s)
-Passed!  - Failed: 0, Passed: 94, Skipped: 0, Total: 94
+Passed!  - Failed: 0, Passed: 166, Skipped: 0, Total: 166
 ```
 
 Warnings are treated as errors, so any warning fails the build.
 
-What the 94 tests cover:
+What the 166 tests cover:
 
 | Test class | Covers |
 |---|---|
 | `ReplayGuardTests` | sequence replay, stale timestamps, server clock offset, restrictive-command exemption |
 | `ReconnectBackoffTests` | exponential backoff with jitter stays within bounds |
-| `AgentOptionsValidatorTests` | pin required in production, no untrusted TLS, no plain-text station/enrollment token, https enrollment endpoint |
+| `AgentOptionsValidatorTests` | pin required in production, no untrusted TLS, no plain-text station/enrollment token, https enrollment and game catalog endpoints, allowed game folders |
 | `CommandDispatcherTests` | allow-list, idempotency (only successes recorded), STALE, early SHUTDOWN ack |
 | `CommandPayloadTests` | strict parsing: no culture-dependent numbers, unknown policy fields rejected |
 | `StationControllerTests` | unlock, lease expiry fail-closed, renewals, LOCK / END_SESSION semantics |
@@ -101,6 +101,12 @@ What the 94 tests cover:
 | `DpapiStationCredentialStoreTests` | encryption, file ACL, fail-closed on corrupt blobs, never logged |
 | `DpapiStationKeyStoreTests` | station key pair persists, never in plain text, unreadable key → new identity |
 | `EnrollmentServiceTests` | first-contact enrollment: signed request, PENDING polling, ENROLLED / REJECTED, retries, tokens never logged |
+| `GameCatalogValidatorTests` | every catalog field checked: exe paths, Steam app ids, Epic AppNames, arguments, reserved process names |
+| `GameLaunchResolverTests` | exe / Steam / Epic command lines, "not installed" reasons without paths, allowed game folders (incl. `..` traversal) |
+| `GameLibrariesTests` | Steam `libraryfolders.vdf`, Epic manifests, protocol-handler command parsing |
+| `GameCatalogRepositoryTests` | launcher fields round trip, `ReplaceAllAsync`, migration v3 keeps old rows |
+| `GameCatalogServiceTests` | sync replaces the catalog, bad entries skipped and reported, `catalog_status`, `CATALOG_UPDATE` and reconnect trigger a sync |
+| `GameServiceTests` | unknown / not-installed games refused before anything is stopped |
 
 Run a single class:
 
@@ -131,8 +137,11 @@ Type a menu key and press **Enter** to send something to the agent:
 |---|---|---|
 | `1` | `LOCK` | locks. With the LockUI running: `COMMAND_ACK`. **Without it: `COMMAND_NACK EXEC_FAILED` "…the lock screen app (LockUI) is not running…"**. This is expected: the station *is* locked, but nothing is shown on screen, so the agent refuses to tell the backend it is. |
 | `2` | `UNLOCK` with a new session and a 60 s lease | unlocks, `command_ack` |
-| `3` | `LAUNCH_GAME` `notepad` | opens Notepad (only when unlocked) |
-| `4` | `END_SESSION` for the current session | closes Notepad, locks |
+| `3` | `LAUNCH_GAME` `charmap` | opens Character Map, the test game (only when unlocked) |
+| `l` | `LAUNCH_GAME` `calc` | opens Calculator; `calc.exe` exits at once and the agent follows `CalculatorApp` by `processName` |
+| `s` | `LAUNCH_GAME` `cs2` (Steam) | `COMMAND_NACK EXEC_FAILED` "…not installed…" unless CS2 is installed; otherwise Steam starts it |
+| `c` | `CATALOG_UPDATE` | `command_ack`, then the agent downloads the catalog and sends `catalog_status` |
+| `4` | `END_SESSION` for the current session | closes the running game, locks |
 | `5` | valid `POLICY_UPDATE` | `command_ack` |
 | `6` | `SHUTDOWN` | ⚠ **really shuts your PC down** after 2 s: don't press it on your own machine |
 | `7` | `LOCK` with a reused `seq` | nack `STALE` |
@@ -160,7 +169,7 @@ Optional: `$env:MOCK_AUTO_RELOCK_SECONDS = "20"` before starting the mock makes 
 dotnet run --project src/BaronDeskAgent.ServiceCore
 ```
 
-`dotnet run` uses `Properties/launchSettings.json`, which sets `DOTNET_ENVIRONMENT=Development` (mock URL `ws://…`, untrusted certificates allowed, `notepad` seeded as a test game).
+`dotnet run` uses `Properties/launchSettings.json`, which sets `DOTNET_ENVIRONMENT=Development` (mock URL `ws://…`, untrusted certificates allowed, `charmap` (Character Map) seeded as a test game until the first catalog sync).
 
 **Expected in the agent (terminal B):**
 
@@ -216,16 +225,20 @@ Keep the LockUI **closed** for this step, so you can keep typing in the terminal
 
 | Step | Action | Expected |
 |---|---|---|
+| 5.0 | (on connect, nothing to type) | Mock: `[CATALOG] GET /stations/me/games`, then `[CATALOG_STATUS] 2/6 game(s) launchable`: `charmap`, `calc` installed; `cs2`, `fortnite`, `missing` not launchable with a reason; `invalid` rejected. Needs a station credential: without one the mock answers 401, the agent retries with backoff, and the seeded `charmap` still works. |
+| 5.0b | Mock: `c` (CATALOG_UPDATE) | `COMMAND_ACK`, then a second `[CATALOG]` download and `[CATALOG_STATUS]` |
 | 5.1 | Mock: `3` (game while locked) | `COMMAND_NACK EXEC_FAILED`: "The station must be unlocked with an active session to launch a game." |
 | 5.2 | Mock: `2` (UNLOCK) | `COMMAND_ACK`; agent: `Session … is active.` and `Station UNLOCKED` |
-| 5.3 | Mock: `3` (LAUNCH_GAME notepad) | Notepad opens on your desktop, `COMMAND_ACK` |
-| 5.4 | Mock: `3` again | No second Notepad; agent: `Game notepad is already running.` |
-| 5.5 | Mock: `4` (END_SESSION) | Notepad closes; agent: `Station LOCKED (overlay: HelperNotConnected)` and `Session … ended (user_logout)`. The mock shows `EXEC_FAILED` "Session ended. The station is now locked, but the lock screen app (LockUI) is not running…"; with the LockUI running it is `COMMAND_ACK`. |
+| 5.3 | Mock: `3` (LAUNCH_GAME charmap) | Character Map opens on your desktop, `COMMAND_ACK` |
+| 5.4 | Mock: `3` again | No second Character Map; agent: `Game charmap is already running.` |
+| 5.4b | Mock: `s` (LAUNCH_GAME cs2) | Without CS2 installed: `COMMAND_NACK EXEC_FAILED` "…cannot be launched on this station: The game is not installed in any Steam library…", and **Character Map keeps running** (checked before stopping the current game) |
+| 5.4c | Mock: `l` (LAUNCH_GAME calc) | Character Map closes, Calculator opens (close any Calculator of your own first: session end closes every `CalculatorApp`). `calc.exe` exits at once, but the agent follows `CalculatorApp` by `processName`: `l` again does not open a second one |
+| 5.5 | Mock: `4` (END_SESSION) | The running game (Calculator) closes; agent: `Station LOCKED (overlay: HelperNotConnected)` and `Session … ended (user_logout)`. The mock shows `EXEC_FAILED` "Session ended. The station is now locked, but the lock screen app (LockUI) is not running…"; with the LockUI running it is `COMMAND_ACK`. |
 | 5.5b | Mock: `2`, then `1` (LOCK) | Same as 5.5: the agent locks (`Station LOCKED (overlay: HelperNotConnected)`) but answers `EXEC_FAILED` because no LockUI shows the overlay. In step 6 the same LOCK is acknowledged. |
 | 5.6 | Mock: `2` (UNLOCK), wait for one heartbeat, then `q` (backend goes down) | Agent keeps the session for the lease (60 s) + grace (10 s). After about **60–75 s**: `Station is unlocked without a valid lease (Expired). Failing closed.` then `Station LOCKED` and `Session … ended (lease_expired)`. |
 | 5.7 | Restart the mock | Agent reconnects; the mock shows a `state_report` with `Locked: true`, `SessionId: none` |
 
-**What this proves:** games only launch for an active session; teardown stops the game; a network outage longer than the lease locks the station (fail closed), while a short blip would not.
+**What this proves:** the catalog comes from the backend and the station reports what it can launch; games only launch for an active session; a request for a missing game never kills the running one; games that start through a stub or launcher are still tracked; teardown stops the game; a network outage longer than the lease locks the station (fail closed), while a short blip would not.
 
 ---
 
@@ -257,7 +270,7 @@ A normal window titled **"BaronDesk LockUI — TEST MODE — LOCKED"** appears, 
 | 6A.3 | Type a wrong PIN 5 times, then try once more | The 6th attempt shows "Too many attempts. Try again in 30s." and the button is disabled for 30 s |
 | 6A.4 | Type `1234`, press Enter | "PIN accepted — unlocking…", banner switches to **UNLOCKED**. Mock: `[LOGIN_REQUEST] method=pin -> ACCEPTED`, `UNLOCK`, `COMMAND_ACK` |
 | 6A.5 | Mock: `1` (LOCK) | Banner back to **LOCKED**; the mock gets **`COMMAND_ACK`** (compare with step 5, where it was `EXEC_FAILED` without the LockUI). Agent: `Station LOCKED (overlay: Confirmed).` |
-| 6A.6 | Mock: `2` (UNLOCK from the dashboard), then `3` (Notepad), then `1` (LOCK) | UNLOCKED → Notepad opens → LOCKED **and Notepad closes** (`StopGameOnLock`: an overlay cannot cover a fullscreen game) |
+| 6A.6 | Mock: `2` (UNLOCK from the dashboard), then `3` (Character Map), then `1` (LOCK) | UNLOCKED → Character Map opens → LOCKED **and Character Map closes** (`StopGameOnLock`: an overlay cannot cover a fullscreen game) |
 | 6A.7 | Unlocked: stop the **mock** (`q`) | Status "Service unavailable — please ask the staff for help."; after ~60–75 s (lease + grace) the banner switches to **LOCKED**, and the PIN box stays disabled: **no new sessions offline**. Restart the mock to log in again. |
 | 6A.8 | Unlocked: stop the **agent** (Ctrl+C in terminal B) | After **15 s** the LockUI switches to **LOCKED** by itself (without the service nothing enforces the lease). Restart the agent: it reconnects and stays locked. |
 | 6A.9 | Start a second LockUI in another terminal | It exits immediately: one lock screen per session |
@@ -481,18 +494,18 @@ Hands-free: `$env:MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS = "3"` approves every new
 | Task Manager disabled after testing (agent ran as Administrator and was stopped while locked) | From an **elevated** prompt: `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System /v DisableTaskMgr /f` |
 | `--windowed` shows the fullscreen lock screen anyway | You are running a Release build (the flag is ignored there on purpose). Use `dotnet run` (Debug) |
 | Can't type in the mock while the kiosk lock screen is shown | Use `MOCK_AUTO_RELOCK_SECONDS` (step 6B), or the windowed mode (step 6A) |
-| Start from a clean local state | Stop the agent, then delete `C:\ProgramData\BaronDeskAgent\Data\agent.sqlite*`; it is re-created (policy defaults, `notepad` seed) on the next start |
+| Start from a clean local state | Stop the agent, then delete `C:\ProgramData\BaronDeskAgent\Data\agent.sqlite*`; it is re-created (policy defaults, `charmap` seed) on the next start |
 | Inspect the local database | Open `agent.sqlite` with *DB Browser for SQLite* (tables `OutboxMessages`, `GameCatalog`, `StationPolicy`, `HandledCommands`) |
 
 ---
 
 ## 13. Final Checklist
 
-- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 94 passed
+- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 166 passed
 - [ ] Agent connects: `handshake`, `state_report`, `heartbeat` in `seq` order
 - [ ] `UNKNOWN_TYPE`, replayed `seq`, stale `UNLOCK` rejected; stale `LOCK` executed; malformed frame ignored
 - [ ] Reconnect with growing, jittered delays after the mock stops
-- [ ] UNLOCK → Notepad launch → END_SESSION closes it
+- [ ] UNLOCK → Character Map launch → END_SESSION closes it
 - [ ] Mock down while unlocked → station locks after lease + grace
 - [ ] LockUI windowed mode (6A): wrong PIN rejected by the backend, `1234` unlocks, 5 failures → 30 s lockout, LOCK acknowledged
 - [ ] LockUI kiosk mode (6B): fullscreen on every monitor, escape keys blocked, auto-relock brings the overlay back

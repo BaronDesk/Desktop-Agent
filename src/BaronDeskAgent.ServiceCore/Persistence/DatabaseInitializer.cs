@@ -68,6 +68,13 @@ public sealed class DatabaseInitializer
 
         -- The Notepad test entry used to be seeded into every database; development builds seed it explicitly.
         DELETE FROM GameCatalog WHERE GameId = 'notepad';
+        """,
+
+        // v3: launcher-aware catalog. Existing rows are plain executables, which is the LaunchType default.
+        """
+        ALTER TABLE GameCatalog RENAME COLUMN ExecutablePath TO Target;
+        ALTER TABLE GameCatalog ADD COLUMN LaunchType TEXT NOT NULL DEFAULT 'exe';
+        ALTER TABLE GameCatalog ADD COLUMN ProcessName TEXT;
         """
     ];
 
