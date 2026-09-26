@@ -35,7 +35,7 @@ Desktop-Agent
 └── Data\
     ├── agent.sqlite          (+ -wal, -shm)
     │     ├── OutboxMessages   alerts waiting for delivery
-    │     ├── GameCatalog      gameId → executable (source of LAUNCH_GAME)
+    │     ├── GameCatalog      gameId → how to start it (source of LAUNCH_GAME, synced from the backend)
     │     ├── StationPolicy    backend-tuned limits (single 'active' row)
     │     └── HandledCommands  ids of the last 256 successful commands
     │
@@ -112,6 +112,7 @@ InitializeAsync()
 |---|---|
 | **v1** | Original schema: `OutboxMessages`, `GameCatalog`, `StationPolicy` (`CREATE … IF NOT EXISTS`, so databases created before versioning adopt it) |
 | **v2** | `StationPolicy.StopGameOnLock` column (default 1); clears `OutboxMessages` (old rows held whole envelopes with a stale `seq`/`ts` that the backend's anti-replay rejects); creates `HandledCommands`; removes the old seeded `notepad` catalog row |
+| **v3** | Launcher-aware catalog: `GameCatalog.ExecutablePath` renamed to `Target`; new `LaunchType` (default `exe`, so existing rows keep working) and `ProcessName` columns (see `SessionCommandsAndSystem.md` §2) |
 
 Rules for future changes: **add a new migration at the end, never edit a shipped one.**
 
@@ -142,7 +143,7 @@ static async Task InitializeLocalStateAsync(IServiceProvider provider, IHostEnvi
 
     if (environment.IsDevelopment())
     {
-        await provider.GetRequiredService<DevelopmentDataSeeder>().SeedAsync();  // 'notepad' test game
+        await provider.GetRequiredService<DevelopmentDataSeeder>().SeedAsync();  // 'charmap' test game
     }
 
     await provider.GetRequiredService<IPolicyStore>().InitializeAsync();          // validated policy

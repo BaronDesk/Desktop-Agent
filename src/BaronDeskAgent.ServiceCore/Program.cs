@@ -4,6 +4,7 @@ using BaronDeskAgent.ServiceCore.Commands.Handlers;
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Connection;
 using BaronDeskAgent.ServiceCore.Credentials;
+using BaronDeskAgent.ServiceCore.Enrollment;
 using BaronDeskAgent.ServiceCore.Games;
 using BaronDeskAgent.ServiceCore.Ipc;
 using BaronDeskAgent.ServiceCore.Persistence;
@@ -14,7 +15,7 @@ using BaronDeskAgent.ServiceCore.Telemetry;
 using BaronDeskAgent.ServiceCore.Telemetry.Outbox;
 using Microsoft.Extensions.Options;
 
-// Provisioning (--set-station-token / --clear-station-token) runs instead of the agent.
+// Provisioning (--set/--clear-enrollment-token, --set/--clear-station-token) runs instead of the agent.
 if (CredentialCommandLine.TryRun(args, out var exitCode))
 {
     return exitCode;
@@ -35,8 +36,14 @@ services.AddSingleton<DevelopmentDataSeeder>();
 services.AddSingleton<PolicyRepository>();
 services.AddSingleton<IPolicyStore, PolicyStore>();
 
-// Server connection
+// Station identity & enrollment
 services.AddSingleton<IStationCredentialStore, DpapiStationCredentialStore>();
+services.AddSingleton<IEnrollmentTokenStore, DpapiEnrollmentTokenStore>();
+services.AddSingleton<IStationKeyStore, DpapiStationKeyStore>();
+services.AddSingleton<IEnrollmentClient, HttpEnrollmentClient>();
+services.AddSingleton<EnrollmentService>();
+
+// Server connection
 services.AddSingleton<ServerClock>();
 services.AddSingleton<ReplayGuard>();
 services.AddSingleton<IServerConnection, WebSocketConnection>();
@@ -52,6 +59,11 @@ services.AddSingleton<LoginRelay>();
 
 // Games & power
 services.AddSingleton<GameCatalogRepository>();
+services.AddSingleton<IGameCatalogClient, HttpGameCatalogClient>();
+services.AddSingleton<IGameLibraryLocator, WindowsGameLibraryLocator>();
+services.AddSingleton<GameLaunchResolver>();
+services.AddSingleton<GameCatalogService>();
+services.AddSingleton<GameCatalogSyncWorker>();
 services.AddSingleton<InteractiveProcessLauncher>();
 services.AddSingleton<GameService>();
 services.AddSingleton<SystemPowerService>();
@@ -64,6 +76,7 @@ services.AddSingleton<ICommandHandler, EndSessionCommandHandler>();
 services.AddSingleton<ICommandHandler, LaunchGameCommandHandler>();
 services.AddSingleton<ICommandHandler, ShutdownCommandHandler>();
 services.AddSingleton<ICommandHandler, PolicyUpdateCommandHandler>();
+services.AddSingleton<ICommandHandler, CatalogUpdateCommandHandler>();
 services.AddSingleton<CommandDispatcher>();
 
 // Telemetry & outbox
@@ -80,6 +93,7 @@ services.AddHostedService(provider => provider.GetRequiredService<PipeServer>())
 services.AddHostedService<ConnectionWorker>();
 services.AddHostedService<HeartbeatWorker>();
 services.AddHostedService<OutboxWorker>();
+services.AddHostedService(provider => provider.GetRequiredService<GameCatalogSyncWorker>());
 services.AddHostedService<HardwareMonitorService>();
 services.AddHostedService<UsbMonitorService>();
 

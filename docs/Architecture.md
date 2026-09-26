@@ -25,7 +25,8 @@ Desktop-Agent
 │   │   ├── Commands                     CommandDispatcher, CommandOutcomeStore, Handlers/
 │   │   ├── Session                      StationController, LockService, SessionService,
 │   │   │                                LeaseManager, HeartbeatWorker, LoginRelay
-│   │   ├── Games                        GameService, InteractiveProcessLauncher, catalog
+│   │   ├── Games                        GameService, InteractiveProcessLauncher, catalog sync,
+│   │   │                                Steam/Epic discovery, launch resolver
 │   │   ├── Power                        SystemPowerService
 │   │   ├── Telemetry                    sensors, mapper, delta filter, alerts, publisher, Outbox/
 │   │   ├── AntiTheft                    UsbMonitorService, UsbDeviceEnumerator
@@ -89,7 +90,7 @@ A Windows Service runs in Session 0 with no desktop, so it cannot show the lock 
 
 1. **The agent decides nothing.** It never verifies a credential, judges a balance or invents a session. It relays, and obeys `UNLOCK` / `LOCK`.
 2. **Fail closed.** Unknown, stale, offline or broken states end with the station locked. The code enforces the invariant *unlocked ⇒ valid lease*.
-3. **Only six commands**, matched case-sensitively: `UNLOCK`, `LOCK`, `SHUTDOWN`, `LAUNCH_GAME`, `END_SESSION`, `POLICY_UPDATE`.
+3. **Only allow-listed commands**, matched case-sensitively: the six frozen ones (`UNLOCK`, `LOCK`, `SHUTDOWN`, `LAUNCH_GAME`, `END_SESSION`, `POLICY_UPDATE`) plus the proposed `CATALOG_UPDATE`. Games run only from the local catalog, never from a path in a command.
 4. **No secrets in logs or SQLite.** Credentials typed on the lock screen are relayed and forgotten; the station credential lives in DPAPI.
 5. **Event-driven, feather-light.** No polling loops; workers sleep until a timer tick, a frame or a signal.
 6. **The backend clock is authoritative.** Timing uses the estimated server clock or the monotonic clock, never the station's wall clock.
@@ -109,6 +110,7 @@ A Windows Service runs in Session 0 with no desktop, so it cannot show the lock 
 | Hardware alerts, USB anti-theft | [TelemetryAlerts.md](TelemetryAlerts.md) | `HardwareAlertEvaluator`, `UsbMonitorService` |
 | Station policy, `POLICY_UPDATE` | [PolicyStore.md](PolicyStore.md) | `StationPolicy`, `PolicyStore` |
 | Station credential (DPAPI) | [CredentialStore.md](CredentialStore.md) | `DpapiStationCredentialStore`, `CredentialCommandLine` |
+| First connection: enrollment, station key pair | [Enrollment.md](Enrollment.md) | `EnrollmentService`, `HttpEnrollmentClient`, `DpapiStationKeyStore` |
 | SQLite, data directory, migrations | [LocalStorage.md](LocalStorage.md) | `AgentDatabase`, `SecureDataDirectory`, `DatabaseInitializer` |
 | Code review findings and fixes | [ReviewFixes.md](ReviewFixes.md) | — |
 
@@ -127,6 +129,7 @@ Envelope (frozen): `{ "type", "id", "ts", "seq", "payload" }`. Outbound `seq`/`t
 | agent → server | `alert` | `category, type, severity, detail, occurredAt` | TelemetryAlerts |
 | agent → server | `command_ack` / `command_nack` | `commandId` / `commandId, code, reason` | CommandsHandling |
 | agent → server | `login_request` ⚠ OPEN | `method, credential` | LockUIAndIPC |
+| agent → server | `catalog_status` ⚠ OPEN | `games: [{ gameId, installed, reason? }]` | SessionCommandsAndSystem |
 | server → agent | `handshake_ack` ⚠ OPEN | `serverTime?` | WebSocketConnection |
 | server → agent | `heartbeat_ack` ⚠ OPEN | `leaseSeconds?, leaseExpiresAt?, serverTime?` | SessionAndLeaseControl |
 | server → agent | `login_result` ⚠ OPEN | `requestId, accepted, reason?` | LockUIAndIPC |
@@ -136,6 +139,9 @@ Envelope (frozen): `{ "type", "id", "ts", "seq", "payload" }`. Outbound `seq`/`t
 | server → agent | `LAUNCH_GAME` | `gameId` | SessionCommandsAndSystem |
 | server → agent | `SHUTDOWN` | `action?, delaySeconds?, reason?` | SessionCommandsAndSystem |
 | server → agent | `POLICY_UPDATE` | partial `StationPolicy` | PolicyStore |
+| server → agent | `CATALOG_UPDATE` ⚠ OPEN | `{}` (the agent then pulls the catalog) | SessionCommandsAndSystem |
+| agent → server (REST, before the WSS link) | `POST /enrollment/request` | `oneTimeToken, mac, ip` + ⚠ OPEN `serialNumber, machineName, agentVersion, agentPublicKey, signedAt, signature` | Enrollment |
+| agent → server (REST, station JWT) | `GET /stations/me/games` ⚠ OPEN | → `{ games: [{ gameId, name, launchType, target, arguments?, workingDirectory?, processName? }] }` | SessionCommandsAndSystem |
 
 ⚠ OPEN items are proposals awaiting confirmation from backend member C (skill document §15).
 
@@ -146,20 +152,20 @@ Envelope (frozen): `{ "type", "id", "ts", "seq", "payload" }`. Outbound `seq`/`t
 ```text
 BaronDeskAgent.ServiceCore.exe
       │
-      ├── --set-station-token / --clear-station-token ?  ──► provisioning only, exit
+      ├── --set/--clear-enrollment-token, --set/--clear-station-token ?  ──► provisioning only, exit
       │
       ├── Build host, validate AgentOptions (unsafe TLS / plain-text token → stop)
       │
       ├── InitializeLocalStateAsync
       │     ├── secure data directory + SQLite migrations
-      │     ├── Development only: seed 'notepad'
+      │     ├── Development only: seed 'charmap'
       │     ├── load + validate station policy
       │     ├── load handled command ids
       │     └── start StationController (lease watchdog)
       │
       └── Run hosted workers
             ├── PipeServer            (lock screen IPC + watchdog)
-            ├── ConnectionWorker      (connect → handshake → state_report → receive)
+            ├── ConnectionWorker      (first run: enroll → connect → handshake → state_report → receive)
             ├── HeartbeatWorker
             ├── OutboxWorker
             ├── HardwareMonitorService
@@ -181,7 +187,12 @@ Static settings live in the `Agent` section of `appsettings.json`, validated at 
 | `AllowUntrustedCertificate` | Development only |
 | `SerialNumber` | Defaults to the machine name |
 | `StationToken` | Development-only fallback; production uses DPAPI |
+| `EnrollmentUrl` | Defaults to `https://<ServerUrl host>/enrollment/request`; `http://` only in Development |
+| `EnrollmentToken` | Development-only fallback for the one-time token; production uses `--set-enrollment-token` (DPAPI) |
+| `EnrollmentPollSeconds` | How often a `PENDING` enrollment asks again (default 15) |
 | `LockUiExecutablePath` | Enables LockUI image verification and relaunch |
+| `GameCatalogUrl` | Defaults to `https://<ServerUrl host>/stations/me/games`; `http://` only in Development |
+| `AllowedGameDirectories` | Optional: `exe` games only launch from inside these folders (empty = any) |
 | `ReconnectBaseDelaySeconds`, `ReconnectMaxDelaySeconds`, `KeepAliveIntervalSeconds`, `MaxTimestampDriftSeconds` | Connection tuning |
 
 Everything the backend tunes at runtime (cadences, lease, thresholds, debounce, `StopGameOnLock`) is **station policy**, changed with `POLICY_UPDATE` and persisted (see `PolicyStore.md`).
@@ -192,7 +203,7 @@ Everything the backend tunes at runtime (cadences, lease, thresholds, debounce, 
 
 ```powershell
 dotnet build BaronDeskAgent.slnx          # 0 warnings (warnings are errors)
-dotnet test BaronDeskAgent.slnx           # 77 tests
+dotnet test BaronDeskAgent.slnx           # 166 tests
 
 node tools/mock-server/mock-server.js
 $env:DOTNET_ENVIRONMENT = "Development"; dotnet run --project src/BaronDeskAgent.ServiceCore
@@ -202,7 +213,8 @@ dotnet run --project src/BaronDesk.LockUI # covers the screen; the mock accepts 
 Production provisioning (elevated prompt):
 
 ```powershell
-"<station JWT>" | BaronDeskAgent.ServiceCore.exe --set-station-token
+"<one-time token>" | BaronDeskAgent.ServiceCore.exe --set-enrollment-token   # enrolls on first start (Enrollment.md)
+"<station JWT>" | BaronDeskAgent.ServiceCore.exe --set-station-token         # manual fallback
 ```
 
 ---
@@ -214,11 +226,11 @@ Production provisioning (elevated prompt):
 - [x] Branch 3 — Session, lease, heartbeat, `state_report`, fail-closed
 - [x] Branch 5 — Lock UI overlay, locked-down named-pipe IPC, PIN relay
 - [x] Branch 6 — Game catalog, session-aware launching, power commands
+- [x] Game catalog delivery (agent side): HTTPS pull, `catalog_status`, Steam/Epic launching, `processName` tracking (contract OPEN with backend C, skill §15 item 9)
 - [x] Branch 7 — Hardware alerts, USB anti-theft
 - [x] Branch 8 — Policy store with live updates
 - [x] Code review fixes (critical, high, medium) — see `ReviewFixes.md`
 - [x] Branch 4 (part) — DPAPI credential store and provisioning command
-- [ ] Branch 4 — Enrollment flow (waits for backend endpoints)
+- [x] Branch 4 — Enrollment flow: station key pair, signed first-contact request, approval polling (agent side; response shape OPEN with backend C)
 - [ ] Branch 9 — Windows Service hosting, recovery, LockUI launch at sign-in
 - [ ] Branch 10 — Benchmark report (`docs/benchmark/`)
-- [ ] Game catalog delivery from the backend (skill §15 item 9)

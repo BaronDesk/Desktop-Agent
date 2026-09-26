@@ -4,20 +4,21 @@ using System.Text.Json.Serialization.Metadata;
 using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Configuration;
+using BaronDeskAgent.ServiceCore.Enrollment;
 using BaronDeskAgent.ServiceCore.Session;
 using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Connection;
 
 /// <summary>
-/// Owns the connection lifecycle: connect → handshake → state report → receive loop → back off → reconnect.
+/// Owns the connection lifecycle: enroll (first run only) → connect → handshake → state report → receive loop → back off → reconnect.
 /// </summary>
 public sealed class ConnectionWorker : BackgroundService
 {
     /// <summary>A connection that lasted this long resets the reconnect backoff.</summary>
     private static readonly TimeSpan StableConnectionThreshold = TimeSpan.FromSeconds(30);
 
-    private static readonly string AgentVersion =
+    internal static readonly string AgentVersion =
         typeof(ConnectionWorker).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? "0.0.0";
 
@@ -27,6 +28,7 @@ public sealed class ConnectionWorker : BackgroundService
     private readonly ServerClock _serverClock;
     private readonly StationController _station;
     private readonly LoginRelay _loginRelay;
+    private readonly EnrollmentService _enrollment;
     private readonly AgentOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ConnectionWorker> _logger;
@@ -38,6 +40,7 @@ public sealed class ConnectionWorker : BackgroundService
         ServerClock serverClock,
         StationController station,
         LoginRelay loginRelay,
+        EnrollmentService enrollment,
         IOptions<AgentOptions> options,
         TimeProvider timeProvider,
         ILogger<ConnectionWorker> logger)
@@ -48,6 +51,7 @@ public sealed class ConnectionWorker : BackgroundService
         _serverClock = serverClock;
         _station = station;
         _loginRelay = loginRelay;
+        _enrollment = enrollment;
         _options = options.Value;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -55,6 +59,16 @@ public sealed class ConnectionWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        try
+        {
+            // First run only: obtain the station credential before the first connect (no-op once enrolled).
+            await _enrollment.EnsureEnrolledAsync(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+
         var attempt = 0;
 
         while (!stoppingToken.IsCancellationRequested)

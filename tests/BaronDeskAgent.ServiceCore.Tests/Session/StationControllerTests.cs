@@ -1,9 +1,11 @@
+using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Connection;
 using BaronDeskAgent.ServiceCore.Games;
 using BaronDeskAgent.ServiceCore.Policy;
 using BaronDeskAgent.ServiceCore.Session;
 using BaronDeskAgent.ServiceCore.Tests.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
 namespace BaronDeskAgent.ServiceCore.Tests.Session;
@@ -24,7 +26,10 @@ public sealed class StationControllerTests : IAsyncLifetime
         var lease = new LeaseManager(_policy, new ServerClock(_time), _time, NullLogger<LeaseManager>.Instance);
         var games = new GameService(
             new GameCatalogRepository(_database.Database),
+            new GameLaunchResolver(Options.Create(new AgentOptions())),
+            new FakeGameLibraryLocator(),
             new InteractiveProcessLauncher(NullLogger<InteractiveProcessLauncher>.Instance),
+            _time,
             NullLogger<GameService>.Instance);
 
         _station = new StationController(

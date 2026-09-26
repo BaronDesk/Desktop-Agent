@@ -94,7 +94,7 @@ Docs/                                          tools/mock-server/mock-server.js
 
 - [ ] `login_request` / `login_result` message shapes (skill §15 item 2)
 - [ ] `handshake_ack` / `heartbeat_ack` payloads, lease terms and `serverTime` (item 3)
-- [ ] Station credential transport (item 1) and enrollment endpoints (item 8, roadmap branch 4)
+- [ ] Station credential transport (item 1) and the enrollment answer shape: agent side built, see `Enrollment.md` §4 (item 8, roadmap branch 4)
 - [ ] Game catalog delivery (item 9)
 - [ ] Final lease duration, grace, cadences and thresholds (item 10)
 - [ ] `END_SESSION` semantics (item 12) and whether `LOCK` should stop the game (`StopGameOnLock`, default on)

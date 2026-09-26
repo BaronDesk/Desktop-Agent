@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.Connection;
+using BaronDeskAgent.ServiceCore.Games;
 using BaronDeskAgent.ServiceCore.Persistence;
 using BaronDeskAgent.ServiceCore.Policy;
 using BaronDeskAgent.ServiceCore.Session;
@@ -43,6 +44,23 @@ internal sealed class FakeLockScreen : ILockScreen
         IsShown = false;
         return Task.FromResult(Result);
     }
+}
+
+internal sealed class FakeGameLibraryLocator(GameLibraries? libraries = null) : IGameLibraryLocator
+{
+    public GameLibraries Libraries { get; set; } = libraries ?? GameLibraries.None;
+
+    public GameLibraries Discover() => Libraries;
+}
+
+internal sealed class FakeGameCatalogClient : IGameCatalogClient
+{
+    public GameCatalogResponse Response { get; set; } = new() { Games = [] };
+
+    public Exception? Failure { get; set; }
+
+    public Task<GameCatalogResponse> FetchAsync(CancellationToken cancellationToken) =>
+        Failure is null ? Task.FromResult(Response) : Task.FromException<GameCatalogResponse>(Failure);
 }
 
 internal sealed record SentFrame(string Type, JsonElement Payload, Guid Id);

@@ -3,12 +3,11 @@ using BaronDeskAgent.ServiceCore.Games;
 namespace BaronDeskAgent.ServiceCore.Persistence;
 
 /// <summary>
-/// Development-only sample data, so <c>LAUNCH_GAME { "gameId": "notepad" }</c> works against the mock server.
+/// Development-only sample data, so <c>LAUNCH_GAME { "gameId": "charmap" }</c> works against the mock server before
+/// any catalog sync. A <c>CATALOG_UPDATE</c> replaces the whole catalog, including this entry.
+/// Character Map rather than Notepad: on Windows 11 notepad.exe is a stub that exits, and the Notepad app restores the
+/// developer's own documents, which a test session end must never close.
 /// </summary>
-/// <remarks>
-/// OPEN (skill §15 item 9): production catalog delivery (e.g. <c>GET /games</c> with the station credential)
-/// is not defined yet; <see cref="GameCatalogRepository.UpsertAsync"/> is the entry point for it.
-/// </remarks>
 public sealed class DevelopmentDataSeeder
 {
     private readonly GameCatalogRepository _catalog;
@@ -28,9 +27,9 @@ public sealed class DevelopmentDataSeeder
         return _catalog.UpsertAsync(
             new GameCatalogEntity
             {
-                GameId = "notepad",
-                Name = "Notepad (test game)",
-                ExecutablePath = Path.Combine(system, "notepad.exe"),
+                GameId = "charmap",
+                Name = "Character Map (test game)",
+                Target = Path.Combine(system, "charmap.exe"),
                 WorkingDirectory = system,
                 CreatedAt = now,
                 UpdatedAt = now

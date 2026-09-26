@@ -22,6 +22,13 @@ internal static class InteractiveSession
     /// <summary>True when running as a Windows service (Session 0 isolation).</summary>
     public static bool IsServiceSession => CurrentSessionId.Value == 0;
 
+    /// <summary>
+    /// Session the gamer's programs run in: the console session when running as a service, the agent's own
+    /// session otherwise (development). Null when nobody is on the console.
+    /// </summary>
+    public static int? GetGamerSessionId() =>
+        IsServiceSession ? (int?)GetActiveConsoleSessionId() : CurrentSessionId.Value;
+
     public static uint? GetActiveConsoleSessionId()
     {
         var sessionId = WTSGetActiveConsoleSessionId();

@@ -14,6 +14,9 @@ public static class CommandTypes
     public const string EndSession = "END_SESSION";
     public const string PolicyUpdate = "POLICY_UPDATE";
 
+    // OPEN (skill §15 item 9): not in the frozen list yet, confirm with backend member C (see GameCatalogContracts).
+    public const string CatalogUpdate = "CATALOG_UPDATE";
+
     public static readonly FrozenSet<string> All =
-        new[] { Lock, Unlock, Shutdown, LaunchGame, EndSession, PolicyUpdate }.ToFrozenSet(StringComparer.Ordinal);
+        new[] { Lock, Unlock, Shutdown, LaunchGame, EndSession, PolicyUpdate, CatalogUpdate }.ToFrozenSet(StringComparer.Ordinal);
 }
