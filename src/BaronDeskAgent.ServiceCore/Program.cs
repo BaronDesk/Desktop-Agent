@@ -51,6 +51,7 @@ services.AddSingleton<IServerConnection, WebSocketConnection>();
 // Station state: lock, session, lease, login relay
 services.AddSingleton<PipeServer>();
 services.AddSingleton<ILockScreen>(provider => provider.GetRequiredService<PipeServer>());
+services.AddSingleton<ISessionNotifier>(provider => provider.GetRequiredService<PipeServer>());
 services.AddSingleton<LockService>();
 services.AddSingleton<SessionService>();
 services.AddSingleton<LeaseManager>();
@@ -61,6 +62,7 @@ services.AddSingleton<LoginRelay>();
 services.AddSingleton<GameCatalogRepository>();
 services.AddSingleton<IGameCatalogClient, HttpGameCatalogClient>();
 services.AddSingleton<IGameLibraryLocator, WindowsGameLibraryLocator>();
+services.AddSingleton<IInstalledGameScanner, InstalledGameScanner>();
 services.AddSingleton<GameLaunchResolver>();
 services.AddSingleton<GameCatalogService>();
 services.AddSingleton<GameCatalogSyncWorker>();
@@ -87,6 +89,7 @@ services.AddSingleton<HardwareSensorReader>();
 services.AddSingleton<HardwareTelemetryMapper>();
 services.AddSingleton<TelemetryDeltaFilter>();
 services.AddSingleton<HardwareAlertEvaluator>();
+services.AddSingleton<PeripheralRegistry>();
 
 // Background workers
 services.AddHostedService(provider => provider.GetRequiredService<PipeServer>());
