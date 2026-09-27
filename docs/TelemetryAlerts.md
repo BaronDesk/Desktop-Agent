@@ -70,7 +70,7 @@ Wire contract aligned with the Prisma `TelemetryAlert` model plus the V4 `catego
 | Field | Type | Values |
 |---|---|---|
 | `category` | `string` | `AlertCategories`: `"hardware"`, `"anti_theft"`, `"security_violation"` |
-| `type` | `string` | `AlertTypes`: `"TEMPERATURE_WARNING"`, `"CPU_USAGE"`, `"MEMORY_USAGE"`, `"HARDWARE_FAILURE"` |
+| `type` | `string` | `AlertTypes`. Hardware: `"TEMPERATURE_WARNING"`, `"CPU_USAGE"`, `"MEMORY_USAGE"`, `"HARDWARE_FAILURE"`. Anti-theft: `"DEVICE_REMOVED"`. Security: `"LOCK_SCREEN_MISSING"`, `"IPC_TAMPERING"` |
 | `severity` | `string` | `AlertSeverities`: `"LOW"`, `"MEDIUM"`, `"HIGH"`, `"CRITICAL"` |
 | `detail` | `string` | Human-readable description |
 | `occurredAt` | `DateTimeOffset` | When the condition happened, on the estimated server clock (required) |
@@ -148,7 +148,7 @@ DeviceRemoved (baseline device, last interface gone, anti-theft enabled)
                 → still pending with the same generation?
                      → alert {
                          category: "anti_theft",
-                         type: "HARDWARE_FAILURE",
+                         type: "DEVICE_REMOVED",
                          severity: "CRITICAL",
                          detail: "Peripheral removed and not reconnected: <name> (VID_…&PID_…)",
                          occurredAt: <removal time>
@@ -173,20 +173,52 @@ The old implementation mutated a plain `Dictionary` from both the reader loop an
 
 ---
 
+### Peripheral Connection Status
+
+Besides the alert, the monitor reports the **connection status** of every watched device, so the dashboard can
+show "keyboard: connected / mouse: disconnected" per station and resolve a `DEVICE_REMOVED` alert once the device
+is back. OPEN (skill §15): agent proposal, confirm with backend member C.
+
+| When | What is sent |
+|---|---|
+| Startup inventory done | `peripheral_status` with the whole watched list (if online) |
+| A watched device loses its last interface | `peripheral_status` at once, `connected: false` (the alert still waits for the debounce) |
+| A watched device comes back, or a new device joins the baseline while idle | `peripheral_status`, `connected: true` |
+| Every (re)connect | the same list in `state_report.peripherals` (`PeripheralRegistry`) |
+
+```json
+{
+  "type": "peripheral_status",
+  "payload": {
+    "peripherals": [
+      { "deviceId": "USB\\VID_046D&PID_C077\\5&1A2B3C4D&0&2", "name": "USB Input Device",
+        "vendorProductId": "VID_046D&PID_C077", "connected": false, "changedAt": "2026-09-27T20:15:00Z" }
+    ]
+  }
+}
+```
+
+- Always a **full snapshot**, never a delta: a lost frame is repaired by the next change or the next reconnect.
+- Live only (not through the outbox): a stale status is worth nothing, and `state_report` carries the current one.
+- Reported even when anti-theft alerts are disabled by policy; only the alert is switched off.
+- Gamers' own devices (plugged in during a session) are not in the list.
+
+---
+
 ## 4. Security-Violation Alerts
 
 Raised by `PipeServer` (see `LockUIAndIPC.md`), rate-limited to one per reason every 5 minutes:
 
-| Reason | Detail |
-|---|---|
-| `helper_missing` | Lock screen helper not running for 30 s while the station should be locked |
-| `pipe_squatted` | Another process owns the pipe name (`FirstPipeInstance` failed) |
-| `pipe_client_rejected` | A process outside the console session, or not the configured LockUI, tried to use the pipe |
+| Reason | `type` | Detail |
+|---|---|---|
+| `helper_missing` | `LOCK_SCREEN_MISSING` | Lock screen helper not running for 30 s while the station should be locked |
+| `pipe_squatted` | `IPC_TAMPERING` | Another process owns the pipe name (`FirstPipeInstance` failed) |
+| `pipe_client_rejected` | `IPC_TAMPERING` | A process outside the console session, or not the configured LockUI, tried to use the pipe |
 
 ```json
 {
   "category": "security_violation",
-  "type": "HARDWARE_FAILURE",
+  "type": "LOCK_SCREEN_MISSING",
   "severity": "HIGH",
   "detail": "The lock screen helper is not running while the station is locked.",
   "occurredAt": "2026-09-22T22:31:40.120Z"
@@ -215,12 +247,12 @@ Thresholds are backend-tuned **policy** (changed with `POLICY_UPDATE`, see `Poli
 
 | Payload field | Prisma `TelemetryAlert` |
 |---|---|
-| `type` | `TelemetryAlertType` enum |
+| `type` | `String` (free text) |
 | `severity` | `AlertSeverity` enum |
-| `category` | Not in `schema.prisma` yet (Database V4 drift) — sent anyway |
+| `category` | `AlertCategory` enum (`HARDWARE`, `ANTI_THEFT`, `SECURITY_VIOLATION`): the backend maps the lowercase wire values |
 | `detail`, `occurredAt` | Not in `schema.prisma` yet |
 
-The schema has no anti-theft or security-violation alert types, so those alerts use `HARDWARE_FAILURE` and are distinguished by `category`.
+`type` is a plain string in the schema, so anti-theft and security alerts carry their own types (`DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING`). These are agent proposals: OPEN, confirm with backend member C.
 
 ---
 
@@ -239,6 +271,7 @@ The schema has no anti-theft or security-violation alert types, so those alerts 
 | Anti-theft disabled live | New removals are ignored |
 | CM registration fails | Logged; anti-theft unavailable, agent keeps running |
 | Offline when an alert fires | Persisted in the outbox, delivered after reconnect |
+| Offline when a device is removed or comes back | Status frame dropped; the next `state_report` carries the current list |
 
 ---
 
@@ -252,6 +285,8 @@ The schema has no anti-theft or security-violation alert types, so those alerts 
 - [x] Composite devices tracked per physical device
 - [x] Debounce with generation-checked timer events; all state on one reader loop
 - [x] Security-violation alerts from the lock screen watchdog, rate-limited
+- [x] Peripheral connection status: `peripheral_status` on change, list in `state_report` (contract OPEN)
+- [x] Specific alert types: `DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING` (contract OPEN)
 - [x] All alerts delivered through the SQLite outbox
 - [x] Unit tests for hysteresis, sustain and severity
-- [ ] `category`, `detail`, `occurredAt` and anti-theft types added to `schema.prisma` (backend, V4)
+- [ ] `detail` and `occurredAt` added to `schema.prisma` (backend, V4); `category` and a free-text `type` are there now

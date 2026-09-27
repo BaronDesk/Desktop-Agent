@@ -98,6 +98,10 @@ Docs/                                          tools/mock-server/mock-server.js
 - [ ] Game catalog delivery (item 9)
 - [ ] Final lease duration, grace, cadences and thresholds (item 10)
 - [ ] `END_SESSION` semantics (item 12) and whether `LOCK` should stop the game (`StopGameOnLock`, default on)
+- [ ] Alert types `DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING` (were all `HARDWARE_FAILURE`), see `TelemetryAlerts.md`
+- [ ] `peripheral_status` and `state_report.peripherals` (peripheral connection status), see `TelemetryAlerts.md` §3
+- [ ] `session_notice` (low balance / booking ending, shown on the station), see `LockUIAndIPC.md` §4b
+- [ ] `installed_games` (catalog suggestions), see `SessionCommandsAndSystem.md` §2.8
 
 ---
 

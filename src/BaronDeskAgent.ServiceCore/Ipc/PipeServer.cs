@@ -24,7 +24,7 @@ namespace BaronDeskAgent.ServiceCore.Ipc;
 /// service relays to the backend. Only the console user may open the pipe, only the service may host it
 /// (squatting is detected), and the connecting process is verified.
 /// </remarks>
-public sealed class PipeServer : BackgroundService, ILockScreen
+public sealed class PipeServer : BackgroundService, ILockScreen, ISessionNotifier
 {
     private static readonly TimeSpan ConfirmationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RebindDelay = TimeSpan.FromSeconds(1);
@@ -64,6 +64,10 @@ public sealed class PipeServer : BackgroundService, ILockScreen
     private bool _helperMissingAlerted;
     private long? _lastRelaunchAttempt;
 
+    // The notice being shown, kept so a relaunched helper gets it back. Cleared on every lock / unlock.
+    private readonly object _noticeGate = new();
+    private (SessionNotice Notice, long ShownAt)? _currentNotice;
+
     public PipeServer(
         IServerConnection connection,
         LoginRelay loginRelay,
@@ -86,6 +90,7 @@ public sealed class PipeServer : BackgroundService, ILockScreen
 
     public Task<OverlayResult> ShowAsync(CancellationToken cancellationToken)
     {
+        ForgetNotice();
         _desiredLocked = true;
         ApplyTaskManagerPolicy(locked: true);
         return SendAndConfirmAsync(PipeMessageKind.ShowLock, cancellationToken);
@@ -93,10 +98,42 @@ public sealed class PipeServer : BackgroundService, ILockScreen
 
     public Task<OverlayResult> HideAsync(CancellationToken cancellationToken)
     {
+        ForgetNotice();
         _desiredLocked = false;
         ApplyTaskManagerPolicy(locked: false);
         return SendAndConfirmAsync(PipeMessageKind.HideLock, cancellationToken);
     }
+
+    public async Task ShowNoticeAsync(SessionNotice notice, CancellationToken cancellationToken)
+    {
+        lock (_noticeGate)
+        {
+            _currentNotice = notice.Kind == SessionNoticeKind.Clear ? null : (notice, _timeProvider.GetTimestamp());
+        }
+
+        if (!await TrySendAsync(ToPipeMessage(notice, TimeSpan.Zero), cancellationToken))
+        {
+            _logger.LogDebug("Session notice {Kind} not delivered: no LockUI helper connected.", notice.Kind);
+        }
+    }
+
+    private void ForgetNotice()
+    {
+        lock (_noticeGate)
+        {
+            _currentNotice = null;
+        }
+    }
+
+    private static PipeMessage ToPipeMessage(SessionNotice notice, TimeSpan elapsed) => new()
+    {
+        Kind = PipeMessageKind.SessionNotice,
+        NoticeKind = notice.Kind,
+        RemainingSeconds = notice.Remaining is { } remaining
+            ? (int)Math.Ceiling(Math.Max(0, (remaining - elapsed).TotalSeconds))
+            : null,
+        Detail = notice.Message
+    };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -146,7 +183,7 @@ public sealed class PipeServer : BackgroundService, ILockScreen
         {
             // FirstPipeInstance: another process already hosts this pipe name and could impersonate the service.
             _logger.LogCritical(ex, "Another process owns the pipe name '{Pipe}'.", PipeConfig.Name);
-            await PublishSecurityAlertAsync("pipe_squatted", $"Another process owns the lock-screen pipe name '{PipeConfig.Name}'.", cancellationToken);
+            await PublishSecurityAlertAsync("pipe_squatted", AlertTypes.IpcTampering, $"Another process owns the lock-screen pipe name '{PipeConfig.Name}'.", cancellationToken);
             throw;
         }
 
@@ -168,7 +205,7 @@ public sealed class PipeServer : BackgroundService, ILockScreen
             if (!PipeClientVerifier.IsTrusted(pipe, _options.LockUiExecutablePath, out var reason))
             {
                 _logger.LogWarning("Rejected IPC client: {Reason}.", reason);
-                await PublishSecurityAlertAsync("pipe_client_rejected", $"Rejected lock-screen IPC client: {reason}.", cancellationToken);
+                await PublishSecurityAlertAsync("pipe_client_rejected", AlertTypes.IpcTampering, $"Rejected lock-screen IPC client: {reason}.", cancellationToken);
                 return;
             }
 
@@ -189,6 +226,17 @@ public sealed class PipeServer : BackgroundService, ILockScreen
             ApplyTaskManagerPolicy(_desiredLocked);
             await TrySendAsync(new PipeMessage { Kind = _desiredLocked ? PipeMessageKind.ShowLock : PipeMessageKind.HideLock }, cancellationToken);
             await TrySendAsync(new PipeMessage { Kind = PipeMessageKind.ServerStatus, ServerOnline = _connection.IsReady }, cancellationToken);
+
+            (SessionNotice Notice, long ShownAt)? notice;
+            lock (_noticeGate)
+            {
+                notice = _currentNotice;
+            }
+
+            if (notice is { } current && !_desiredLocked)
+            {
+                await TrySendAsync(ToPipeMessage(current.Notice, _timeProvider.GetElapsedTime(current.ShownAt)), cancellationToken);
+            }
 
             while (await PipeLineReader.ReadLineAsync(reader, PipeConfig.MaxMessageChars, cancellationToken) is { } line)
             {
@@ -408,7 +456,7 @@ public sealed class PipeServer : BackgroundService, ILockScreen
         if (raiseAlert)
         {
             _logger.LogError("The lock screen helper is not running while the station is locked.");
-            _ = PublishSecurityAlertAsync("helper_missing", "The lock screen helper is not running while the station is locked.", cancellationToken);
+            _ = PublishSecurityAlertAsync("helper_missing", AlertTypes.LockScreenMissing, "The lock screen helper is not running while the station is locked.", cancellationToken);
         }
     }
 
@@ -435,7 +483,7 @@ public sealed class PipeServer : BackgroundService, ILockScreen
         }
     }
 
-    private async Task PublishSecurityAlertAsync(string key, string detail, CancellationToken cancellationToken)
+    private async Task PublishSecurityAlertAsync(string key, string type, string detail, CancellationToken cancellationToken)
     {
         lock (_watchdogGate)
         {
@@ -454,7 +502,7 @@ public sealed class PipeServer : BackgroundService, ILockScreen
                 new AlertPayload
                 {
                     Category = AlertCategories.SecurityViolation,
-                    Type = AlertTypes.HardwareFailure,
+                    Type = type,
                     Severity = AlertSeverities.High,
                     Detail = detail,
                     OccurredAt = _serverClock.UtcNow

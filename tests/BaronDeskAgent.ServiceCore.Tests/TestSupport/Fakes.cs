@@ -53,6 +53,15 @@ internal sealed class FakeGameLibraryLocator(GameLibraries? libraries = null) : 
     public GameLibraries Discover() => Libraries;
 }
 
+internal sealed class FakeInstalledGameScanner : IInstalledGameScanner
+{
+    public IReadOnlyList<InstalledGame> Games { get; set; } = [];
+
+    public Exception? Failure { get; set; }
+
+    public IReadOnlyList<InstalledGame> Scan(GameLibraries libraries) => Failure is null ? Games : throw Failure;
+}
+
 internal sealed class FakeGameCatalogClient : IGameCatalogClient
 {
     public GameCatalogResponse Response { get; set; } = new() { Games = [] };

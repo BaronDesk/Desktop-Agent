@@ -10,18 +10,21 @@ namespace BaronDeskAgent.ServiceCore.AntiTheft;
 
 /// <summary>
 /// Best-effort peripheral anti-theft: raises an <c>anti_theft</c> alert when a venue USB HID device is
-/// removed and not plugged back within the debounce window.
+/// removed and not plugged back within the debounce window, and reports the connection status of every
+/// watched device (<c>peripheral_status</c> on each change, and in <c>state_report</c> through <see cref="PeripheralRegistry"/>).
 /// </summary>
 /// <remarks>
 /// Scope and honest limits (state these in the security document): wired USB HID only; wireless dongles,
 /// Bluetooth and hubs/KVMs can hide a theft, and VID/PID identifies a model, not a unit.
 /// The watched baseline is what was present at startup plus what is plugged in while the station is idle
 /// (locked, no session). Devices a gamer plugs in during a session are theirs, so removing them is ignored.
+/// The status is reported whether or not anti-theft alerts are enabled; only the alert waits for the debounce.
 /// All state below is only touched by the single reader loop; native callbacks and timers just post events.
 /// </remarks>
 public sealed class UsbMonitorService : BackgroundService
 {
     private readonly TelemetryPublisher _publisher;
+    private readonly PeripheralRegistry _registry;
     private readonly StationController _station;
     private readonly IPolicyStore _policyStore;
     private readonly ServerClock _serverClock;
@@ -32,7 +35,8 @@ public sealed class UsbMonitorService : BackgroundService
         Channel.CreateUnbounded<UsbEvent>(new UnboundedChannelOptions { SingleReader = true });
 
     private readonly Dictionary<string, UsbHidDevice> _present = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _baseline = new(StringComparer.OrdinalIgnoreCase);
+    // Watched venue equipment by device key, with its last known name and connection state.
+    private readonly Dictionary<string, WatchedPeripheral> _watched = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PendingRemoval> _pendingRemovals = new(StringComparer.OrdinalIgnoreCase);
     private long _generation;
 
@@ -42,6 +46,7 @@ public sealed class UsbMonitorService : BackgroundService
 
     public UsbMonitorService(
         TelemetryPublisher publisher,
+        PeripheralRegistry registry,
         StationController station,
         IPolicyStore policyStore,
         ServerClock serverClock,
@@ -49,6 +54,7 @@ public sealed class UsbMonitorService : BackgroundService
         ILogger<UsbMonitorService> logger)
     {
         _publisher = publisher;
+        _registry = registry;
         _station = station;
         _policyStore = policyStore;
         _serverClock = serverClock;
@@ -64,13 +70,15 @@ public sealed class UsbMonitorService : BackgroundService
             // Register before the inventory, so a device that changes in between is not missed.
             RegisterNotifications();
 
+            var now = _serverClock.UtcNow;
             foreach (var device in UsbDeviceEnumerator.GetPresentWiredHidDevices())
             {
                 _present[device.InstanceId] = device;
-                _baseline.Add(device.DeviceKey);
+                _watched.TryAdd(device.DeviceKey, new WatchedPeripheral(device, Connected: true, ChangedAt: now));
             }
 
-            _logger.LogInformation("USB anti-theft watching {Count} HID device(s).", _baseline.Count);
+            _logger.LogInformation("USB anti-theft watching {Count} HID device(s).", _watched.Count);
+            await PublishStatusAsync(stoppingToken);
 
             await foreach (var usbEvent in _events.Reader.ReadAllAsync(stoppingToken))
             {
@@ -102,11 +110,19 @@ public sealed class UsbMonitorService : BackgroundService
         switch (usbEvent)
         {
             case DeviceArrived arrived:
-                OnDeviceArrived(arrived.InstanceId);
+                if (OnDeviceArrived(arrived.InstanceId))
+                {
+                    await PublishStatusAsync(cancellationToken);
+                }
+
                 break;
 
             case DeviceRemoved removed:
-                OnDeviceRemoved(removed.InstanceId, cancellationToken);
+                if (OnDeviceRemoved(removed.InstanceId, cancellationToken))
+                {
+                    await PublishStatusAsync(cancellationToken);
+                }
+
                 break;
 
             case DebounceElapsed elapsed:
@@ -115,11 +131,12 @@ public sealed class UsbMonitorService : BackgroundService
         }
     }
 
-    private void OnDeviceArrived(string instanceId)
+    /// <summary>Returns true when the watched list changed (a watched device came back, or a new one joined).</summary>
+    private bool OnDeviceArrived(string instanceId)
     {
         if (UsbDeviceEnumerator.TryGetWiredHidDevice(instanceId) is not { } device)
         {
-            return;
+            return false;
         }
 
         _present[instanceId] = device;
@@ -129,36 +146,75 @@ public sealed class UsbMonitorService : BackgroundService
             _logger.LogInformation("{Device} reconnected within the debounce window.", device.Name);
         }
 
-        var station = _station.GetSnapshot();
-        if (!_baseline.Contains(device.DeviceKey) && station.Locked && station.SessionId is null)
+        if (_watched.TryGetValue(device.DeviceKey, out var watched))
         {
-            _baseline.Add(device.DeviceKey);
-            _logger.LogInformation("{Device} ({Id}) added to the watched equipment.", device.Name, device.VendorProductId);
+            if (watched.Connected)
+            {
+                return false; // another interface of a device that is already connected
+            }
+
+            _watched[device.DeviceKey] = watched with { Connected = true, ChangedAt = _serverClock.UtcNow };
+            _logger.LogInformation("{Device} ({Id}) is connected again.", device.Name, device.VendorProductId);
+            return true;
         }
+
+        var station = _station.GetSnapshot();
+        if (station.Locked && station.SessionId is null)
+        {
+            _watched[device.DeviceKey] = new WatchedPeripheral(device, Connected: true, ChangedAt: _serverClock.UtcNow);
+            _logger.LogInformation("{Device} ({Id}) added to the watched equipment.", device.Name, device.VendorProductId);
+            return true;
+        }
+
+        return false;
     }
 
-    private void OnDeviceRemoved(string instanceId, CancellationToken cancellationToken)
+    /// <summary>Returns true when a watched device is now disconnected (all its interfaces are gone).</summary>
+    private bool OnDeviceRemoved(string instanceId, CancellationToken cancellationToken)
     {
-        if (!_present.Remove(instanceId, out var device) || !_baseline.Contains(device.DeviceKey))
+        if (!_present.Remove(instanceId, out var device) || !_watched.TryGetValue(device.DeviceKey, out var watched))
         {
-            return;
+            return false;
         }
 
         // A composite device raises one removal per interface; wait until all of them are gone.
         if (_present.Values.Any(other => string.Equals(other.DeviceKey, device.DeviceKey, StringComparison.OrdinalIgnoreCase)))
         {
-            return;
+            return false;
         }
+
+        _watched[device.DeviceKey] = watched with { Connected = false, ChangedAt = _serverClock.UtcNow };
 
         var policy = _policyStore.CurrentPolicy;
         if (!policy.EnableAntiTheftAlerts)
         {
-            return;
+            return true;
         }
 
         var pending = new PendingRemoval(device, ++_generation, _serverClock.UtcNow);
         _pendingRemovals[device.DeviceKey] = pending;
         _ = PostWhenDebounceElapsesAsync(device.DeviceKey, pending.Generation, TimeSpan.FromSeconds(policy.UsbDebounceWindowSeconds), cancellationToken);
+        return true;
+    }
+
+    /// <summary>Stores the snapshot for <c>state_report</c> and sends it live (dropped offline: the next reconnect carries it).</summary>
+    private async Task PublishStatusAsync(CancellationToken cancellationToken)
+    {
+        var peripherals = _watched
+            .Select(pair => new PeripheralState
+            {
+                DeviceId = pair.Key,
+                Name = pair.Value.Device.Name,
+                VendorProductId = pair.Value.Device.VendorProductId,
+                Connected = pair.Value.Connected,
+                ChangedAt = pair.Value.ChangedAt
+            })
+            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => p.DeviceId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        _registry.Set(peripherals);
+        await _publisher.PublishPeripheralStatusAsync(peripherals, cancellationToken);
     }
 
     private async Task OnDebounceElapsedAsync(DebounceElapsed elapsed, CancellationToken cancellationToken)
@@ -178,7 +234,7 @@ public sealed class UsbMonitorService : BackgroundService
             new AlertPayload
             {
                 Category = AlertCategories.AntiTheft,
-                Type = AlertTypes.HardwareFailure,
+                Type = AlertTypes.DeviceRemoved,
                 Severity = AlertSeverities.Critical,
                 Detail = $"Peripheral removed and not reconnected: {device.Name} ({device.VendorProductId}).",
                 OccurredAt = pending.RemovedAt
@@ -264,6 +320,8 @@ public sealed class UsbMonitorService : BackgroundService
     private sealed record DebounceElapsed(string DeviceKey, long Generation) : UsbEvent;
 
     private sealed record PendingRemoval(UsbHidDevice Device, long Generation, DateTimeOffset RemovedAt);
+
+    private sealed record WatchedPeripheral(UsbHidDevice Device, bool Connected, DateTimeOffset ChangedAt);
 
     #region Native
 

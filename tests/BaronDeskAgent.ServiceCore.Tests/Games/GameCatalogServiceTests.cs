@@ -14,6 +14,7 @@ public sealed class GameCatalogServiceTests : IAsyncLifetime
 {
     private readonly FakeGameCatalogClient _client = new();
     private readonly FakeServerConnection _connection = new();
+    private readonly FakeInstalledGameScanner _scanner = new();
     private readonly string _root = Directory.CreateTempSubdirectory("barondesk-catalog-").FullName;
     private TestDatabase _database = null!;
     private GameCatalogRepository _repository = null!;
@@ -28,6 +29,7 @@ public sealed class GameCatalogServiceTests : IAsyncLifetime
             _repository,
             new GameLaunchResolver(Options.Create(new AgentOptions())),
             new FakeGameLibraryLocator(),
+            _scanner,
             _connection,
             TimeProvider.System,
             NullLogger<GameCatalogService>.Instance);
@@ -63,6 +65,39 @@ public sealed class GameCatalogServiceTests : IAsyncLifetime
         Assert.False(statuses["missing"].GetProperty("installed").GetBoolean());
         Assert.False(statuses["cs2"].GetProperty("installed").GetBoolean());   // no Steam in the fake libraries
         Assert.Contains("Steam", statuses["cs2"].GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task Sync_reports_installed_launcher_games_missing_from_the_catalog()
+    {
+        _scanner.Games =
+        [
+            new InstalledGame(GameLaunchTypes.Steam, "730", "Counter-Strike 2", null),
+            new InstalledGame(GameLaunchTypes.Steam, "570", "Dota 2", null)
+        ];
+        _client.Response = new GameCatalogResponse
+        {
+            Games = [new CatalogGame { GameId = "cs2", Name = "CS2", LaunchType = "steam", Target = "730", ProcessName = "cs2.exe" }]
+        };
+
+        await _service.SyncAsync(CancellationToken.None);
+
+        var games = Assert.Single(_connection.OfType(MessageTypes.InstalledGames)).Payload.GetProperty("games").EnumerateArray()
+            .ToDictionary(game => game.GetProperty("target").GetString()!, game => game.GetProperty("inCatalog").GetBoolean());
+        Assert.True(games["730"]);
+        Assert.False(games["570"]);
+    }
+
+    [Fact]
+    public async Task A_failed_game_scan_never_fails_the_catalog_sync()
+    {
+        _scanner.Failure = new IOException("disk gone");
+        _client.Response = new GameCatalogResponse { Games = [new CatalogGame { GameId = "ok", Target = @"D:\Games\ok.exe" }] };
+
+        await _service.SyncAsync(CancellationToken.None);
+
+        Assert.Single(_connection.OfType(MessageTypes.CatalogStatus));
+        Assert.Empty(_connection.OfType(MessageTypes.InstalledGames));
     }
 
     [Fact]

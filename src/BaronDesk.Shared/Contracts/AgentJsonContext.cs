@@ -23,10 +23,13 @@ namespace BaronDesk.Shared.Contracts;
 [JsonSerializable(typeof(CommandNackPayload))]
 [JsonSerializable(typeof(LoginRequestPayload))]
 [JsonSerializable(typeof(CatalogStatusPayload))]
+[JsonSerializable(typeof(InstalledGamesPayload))]
+[JsonSerializable(typeof(PeripheralStatusPayload))]
 // Server → agent control frames
 [JsonSerializable(typeof(HandshakeAckPayload))]
 [JsonSerializable(typeof(HeartbeatAckPayload))]
 [JsonSerializable(typeof(LoginResultPayload))]
+[JsonSerializable(typeof(SessionNoticePayload))]
 // Server → agent commands
 [JsonSerializable(typeof(UnlockPayload))]
 [JsonSerializable(typeof(LockPayload))]

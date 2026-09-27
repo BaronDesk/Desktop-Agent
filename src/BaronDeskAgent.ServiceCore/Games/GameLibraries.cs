@@ -41,7 +41,7 @@ public sealed partial class WindowsGameLibraryLocator : IGameLibraryLocator
         _logger = logger;
     }
 
-    private static string EpicManifestDirectory => Path.Combine(
+    internal static string EpicManifestDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "Epic", "EpicGamesLauncher", "Data", "Manifests");
 
