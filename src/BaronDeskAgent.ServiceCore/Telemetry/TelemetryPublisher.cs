@@ -49,6 +49,28 @@ public sealed class TelemetryPublisher
         }
     }
 
+    /// <summary>Live only, like telemetry: a snapshot, and the next <c>state_report</c> carries the current one anyway.</summary>
+    public async Task PublishPeripheralStatusAsync(IReadOnlyList<PeripheralState> peripherals, CancellationToken cancellationToken)
+    {
+        if (!_connection.IsReady)
+        {
+            return;
+        }
+
+        try
+        {
+            await _connection.SendAsync(
+                MessageTypes.PeripheralStatus,
+                new PeripheralStatusPayload { Peripherals = peripherals },
+                AgentJsonContext.Default.PeripheralStatusPayload,
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Dropped a peripheral status frame.");
+        }
+    }
+
     public Task PublishAlertAsync(AlertPayload alert, CancellationToken cancellationToken) =>
         _outbox.EnqueueAsync(MessageTypes.Alert, JsonSerializer.Serialize(alert, AgentJsonContext.Default.AlertPayload), cancellationToken);
 }

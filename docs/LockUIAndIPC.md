@@ -51,13 +51,14 @@ Desktop-Agent
     ├── BaronDesk.Shared
     │   └── Ipc
     │       ├── PipeConfig.cs         (pipe name, 4 KiB message limit)
-    │       ├── PipeMessage.cs        (PipeMessageKind, LoginOutcome, PipeMessage)
+    │       ├── PipeMessage.cs        (PipeMessageKind, LoginOutcome, SessionNoticeKind, PipeMessage)
     │       ├── PipeJsonContext.cs    (source-generated JSON, string enums)
     │       └── PipeLineReader.cs     (bounded line reader, both sides)
     │
     ├── BaronDesk.LockUI
     │   ├── App.xaml(.cs)             (single-instance mutex, crash logging)
     │   ├── MainWindow.xaml(.cs)
+    │   ├── NoticeWindow.xaml(.cs)    (in-session corner notice: low balance, booking ending)
     │   ├── Ipc
     │   │   └── PipeClient.cs
     │   └── Kiosk
@@ -71,6 +72,7 @@ Desktop-Agent
         │   └── TaskManagerPolicy.cs  (DisableTaskMgr in the console user's hive)
         └── Session
             ├── ILockScreen.cs
+            ├── SessionNotices.cs     (session_notice validation, ISessionNotifier)
             ├── LockService.cs
             └── LoginRelay.cs
 ```
@@ -98,6 +100,7 @@ Desktop-Agent
 | `SubmitCredential` | LockUI &rarr; ServiceCore | PIN typed by the gamer, to be relayed to the backend. Never logged. |
 | `LoginResult` | ServiceCore &rarr; LockUI | Outcome of the relay (`LoginOutcome` + `detail`). |
 | `ServerStatus` | ServiceCore &rarr; LockUI | Whether the backend is reachable (`serverOnline`). |
+| `SessionNotice` | ServiceCore &rarr; LockUI | Show or clear the in-session notice (`noticeKind`, `remainingSeconds`, optional `detail`). See §4b. |
 
 ### `LoginOutcome`
 
@@ -122,6 +125,10 @@ Desktop-Agent
 
 ```json
 { "kind": "ServerStatus", "serverOnline": true }
+```
+
+```json
+{ "kind": "SessionNotice", "noticeKind": "LowBalance", "remainingSeconds": 180 }
 ```
 
 ---
@@ -241,6 +248,59 @@ LockUI (User Session)            ServiceCore (SYSTEM)                      Backe
 - `login_request` is sent only on a ready connection and never buffered in the outbox.
 - `login_result` passes the replay guard like every inbound frame.
 - The mock server accepts PIN `1234` and answers with `login_result` + `UNLOCK`.
+
+---
+
+## 4b. In-Session Notice (low balance, booking ending)
+
+While the gamer plays, the backend can ask the station to show a small warning before it locks: the balance is
+running out, or the booked time ends soon. The notice is **informational only**: the backend still decides and
+locks with `LOCK` / `END_SESSION` at run-out.
+
+### Wire Message (⚠ OPEN, skill §15: agent proposal, confirm with backend member C)
+
+Server &rarr; agent control frame (not a command: no ack), replay-checked like every inbound frame:
+
+```json
+{
+  "type": "session_notice",
+  "payload": {
+    "sessionId": "6adf0ba1-4ed1-4bf6-a4bc-c3c9a661a499",
+    "kind": "LOW_BALANCE",
+    "endsAt": "2026-09-27T21:03:00Z",
+    "message": null
+  }
+}
+```
+
+| `kind` | Shown as |
+|---|---|
+| `LOW_BALANCE` | Amber box "Low balance", countdown to `endsAt` |
+| `TIME_LEFT` | Blue box "Session ending soon", countdown to `endsAt` |
+| `CLEAR` | Hides the notice (e.g. after a top-up) |
+
+### Flow
+
+```text
+backend ── session_notice ──▶ ConnectionWorker
+                                 │ replay guard, required fields
+                                 │ SessionNotices.TryCreate: kind known? sessionId = active session?
+                                 │ remaining = endsAt − ServerClock.UtcNow   (station clock drift has no effect)
+                                 ▼
+                              PipeServer (ISessionNotifier) ── SessionNotice {noticeKind, remainingSeconds} ──▶ LockUI
+                                 │ keeps the notice; a relaunched helper gets it back with the elapsed time removed
+                                 ▼
+                              NoticeWindow: bottom-right corner, 1 s countdown on the monotonic clock
+```
+
+- A notice for another session (stale) or with an unknown `kind` is dropped and logged.
+- `message` replaces the default text, trimmed to 200 characters.
+- Cleared on every `ShowLock` and `HideLock`: a lock ends it, and a new or resumed session starts clean.
+- The box is a **no-activate tool window** (`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`): it never takes focus, so
+  typing and the game keep working, and it has no taskbar button.
+- Honest limit: a game in **exclusive fullscreen** draws over every window, so the notice only shows in windowed
+  or borderless mode. The run-out lock still happens on time.
+- Mock server: `w` sends `LOW_BALANCE` with 3 minutes left (after `2`, UNLOCK), `k` sends `CLEAR`.
 
 ---
 
@@ -374,5 +434,7 @@ For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOC
 - [x] LockUI single instance; locks itself 15 s after losing the service
 - [x] Service watchdog: alert and relaunch when the helper is missing
 - [x] `dotnet build` succeeds with 0 warnings (warnings as errors) across all projects
+- [x] In-session notice (`session_notice` → `SessionNotice` → corner box with countdown), never takes focus
 - [ ] `login_request` / `login_result` shapes confirmed with backend member C (OPEN)
+- [ ] `session_notice` shape confirmed with backend member C (OPEN)
 - [ ] LockUI launched at sign-in by the Windows Service (roadmap branch 9)

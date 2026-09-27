@@ -20,8 +20,17 @@ public static class MessageTypes
     // OPEN (skill §15 item 9): catalog install status, confirm with backend member C (see GameCatalogContracts).
     public const string CatalogStatus = "catalog_status";
 
+    // OPEN (skill §15 item 9): launcher games installed on the station, to suggest catalog entries. Confirm with backend member C.
+    public const string InstalledGames = "installed_games";
+
+    // OPEN (skill §15): watched USB peripherals and their connection status, confirm with backend member C.
+    public const string PeripheralStatus = "peripheral_status";
+
     // Server → agent control frames. OPEN (skill §15 item 3): not in the frozen list yet, confirm with backend member C.
     public const string HandshakeAck = "handshake_ack";
     public const string HeartbeatAck = "heartbeat_ack";
     public const string LoginResult = "login_result";
+
+    // OPEN (skill §15): in-session warning for the gamer (low balance, booking ending), confirm with backend member C.
+    public const string SessionNotice = "session_notice";
 }

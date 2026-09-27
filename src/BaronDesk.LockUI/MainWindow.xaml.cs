@@ -32,6 +32,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _loginTimeoutTimer;
     private readonly DispatcherTimer _rateLimitTimer;
 
+    // In-session corner notice (low balance, booking ending). Never shown while locked.
+    private readonly NoticeWindow _notice = new();
+
     private readonly bool _windowedTestMode;
 
     private bool _isLocked = true;
@@ -95,6 +98,13 @@ public partial class MainWindow : Window
                 _serverOnline = message.ServerOnline == true;
                 UpdateAvailability();
                 break;
+            case PipeMessageKind.SessionNotice when message.NoticeKind is { } kind:
+                if (!_isLocked)
+                {
+                    _notice.ShowNotice(kind, message.RemainingSeconds, message.Detail);
+                }
+
+                break;
         }
     }
 
@@ -131,6 +141,7 @@ public partial class MainWindow : Window
     private void ShowLockScreen(Guid? correlationId)
     {
         _isLocked = true;
+        _notice.Clear();
 
         if (_windowedTestMode)
         {
@@ -159,6 +170,7 @@ public partial class MainWindow : Window
     private void HideLockScreen(Guid? correlationId)
     {
         _isLocked = false;
+        _notice.Clear(); // a new session (or a resumed one) starts without an old warning
         EndPendingLogin();
         PinBox.Password = string.Empty;
         SetStatus(string.Empty, Brushes.Gray);
@@ -382,6 +394,7 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        _notice.Close();
         _shutdown.Cancel();
         _keyboardHook.Dispose();
         base.OnClosed(e);

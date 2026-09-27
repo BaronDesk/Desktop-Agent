@@ -110,7 +110,7 @@ Backend Server
 
 `LAUNCH_GAME` only ever executes entries of the local catalog, **never a path taken from a command payload**. The backend owns the catalog; SQLite is the station's copy, so games still launch while the backend is briefly unreachable.
 
-> ⚠ OPEN (skill §15 item 9): `CATALOG_UPDATE`, `GET /stations/me/games` and `catalog_status` are agent-side proposals. Backend member C must confirm or change them.
+> ⚠ OPEN (skill §15 item 9): `CATALOG_UPDATE`, `GET /stations/me/games`, `catalog_status` and `installed_games` are agent-side proposals. Backend member C must confirm or change them.
 
 ### 2.1 Delivery
 
@@ -119,6 +119,7 @@ Backend Server
 | server → agent | `CATALOG_UPDATE` command | `{}`: "your catalog changed". Acked once a sync is queued. |
 | agent → server | `GET /stations/me/games` | `Authorization: Bearer <station JWT>` → `{ "games": [CatalogGame, …] }` |
 | agent → server | `catalog_status` | `{ "games": [{ "gameId", "installed", "reason"? }, …] }` |
+| agent → server | `installed_games` | `{ "games": [{ "launchType", "target", "name", "processName"?, "inCatalog" }, …] }`, see §2.8 |
 
 Why a pull over HTTPS instead of the catalog inside the command: the WSS link rejects inbound frames over 64 KB, and a venue catalog can be larger. The endpoint defaults to `/stations/me/games` on the `ServerUrl` host (`wss` → `https`); `Agent:GameCatalogUrl` overrides it. The client uses the same certificate pin, no proxy and no redirects as enrollment (`PinnedHttpClient`), a 15 s timeout and a 1 MB response cap.
 
@@ -205,6 +206,33 @@ Existing rows become `exe` entries (see `LocalStorage.md`).
 ### 2.7 Tamper Protection
 
 The catalog decides which executables the service starts, so the data directory is restricted to SYSTEM and Administrators, and files planted by other users are deleted at startup (see `LocalStorage.md`). The Epic manifests folder may be writable by users, but a planted manifest can only make the agent start the admin-installed Epic launcher, as the gamer, which the gamer could do anyway.
+
+---
+
+### 2.8 Discovering installed games (`InstalledGameScanner`)
+
+After every catalog sync, right after `catalog_status`, the agent reports the **launcher games installed on this
+station**, each marked `inCatalog` or not. The dashboard can then offer "add to catalog" with the Steam app id or
+Epic AppName already filled in, instead of an admin typing them.
+
+```json
+{ "type": "installed_games", "payload": { "games": [
+  { "launchType": "steam", "target": "291550", "name": "Brawlhalla", "processName": null, "inCatalog": false },
+  { "launchType": "epic", "target": "Fortnite", "name": "Fortnite", "processName": "FortniteLauncher.exe", "inCatalog": true }
+] } }
+```
+
+| Source | Read from | Kept |
+|---|---|---|
+| Steam | `steamapps\appmanifest_*.acf` in every library (`libraryfolders.vdf`) | Fully installed (`StateFlags` bit 4); redistributables, runtimes and Proton skipped |
+| Epic | `ProgramData\Epic\EpicGamesLauncher\Data\Manifests\*.item` | Complete installs tagged `games`; `LaunchExecutable` file name suggested as `processName` |
+
+- **Suggestions only.** Nothing is launched from this list; `LAUNCH_GAME` still runs catalog entries only.
+- Plain `.exe` games cannot be found reliably, so they are not listed.
+- Same machine-wide locations as the launchers themselves; manifests over 1 MB and unreadable files are skipped;
+  at most 500 games, names trimmed to 200 characters.
+- A scan failure is logged and never fails the sync (the catalog is already applied and `catalog_status` sent).
+- `inCatalog` matches on launch type + target (case-insensitive), so a Steam entry never hides an Epic one.
 
 ---
 
@@ -376,4 +404,4 @@ The old wiring stopped the game twice: once in the `END_SESSION` handler, and ag
 - [x] `LOCK` stops the game by policy (`StopGameOnLock`)
 - [x] `SHUTDOWN` validated, acked early, station locked before power-off
 - [x] `shutdown.exe` invoked with `ArgumentList` and exit-code checking
-- [ ] Automatic discovery of installed games to suggest catalog entries (later)
+- [x] Discovery of installed Steam / Epic games to suggest catalog entries (`installed_games`, contract OPEN)

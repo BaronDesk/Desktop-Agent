@@ -21,7 +21,19 @@ public enum PipeMessageKind
     LoginResult,
 
     /// <summary>Service → helper: whether the backend is reachable (drives "service unavailable").</summary>
-    ServerStatus
+    ServerStatus,
+
+    /// <summary>Service → helper: show (or clear) the in-session notice, e.g. low balance.</summary>
+    SessionNotice
+}
+
+public enum SessionNoticeKind
+{
+    LowBalance,
+    TimeLeft,
+
+    /// <summary>Hide the notice.</summary>
+    Clear
 }
 
 public enum LoginOutcome
@@ -59,6 +71,12 @@ public sealed record PipeMessage
 
     public bool? ServerOnline { get; init; }
 
+    /// <summary><see cref="PipeMessageKind.SessionNotice"/> only.</summary>
+    public SessionNoticeKind? NoticeKind { get; init; }
+
+    /// <summary><see cref="PipeMessageKind.SessionNotice"/>: seconds until the balance or booking runs out, when known.</summary>
+    public int? RemainingSeconds { get; init; }
+
     public override string ToString() =>
-        $"PipeMessage {{ Kind = {Kind}, CorrelationId = {CorrelationId}, LoginOutcome = {LoginOutcome}, ServerOnline = {ServerOnline} }}";
+        $"PipeMessage {{ Kind = {Kind}, CorrelationId = {CorrelationId}, LoginOutcome = {LoginOutcome}, ServerOnline = {ServerOnline}, NoticeKind = {NoticeKind} }}";
 }

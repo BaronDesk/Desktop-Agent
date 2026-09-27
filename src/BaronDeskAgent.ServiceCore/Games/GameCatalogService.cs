@@ -5,7 +5,8 @@ namespace BaronDeskAgent.ServiceCore.Games;
 
 /// <summary>
 /// Catalog sync: pull the backend's catalog for this machine → validate each entry → replace the local SQLite copy
-/// → report which games this station can actually launch (<c>catalog_status</c>).
+/// → report which games this station can actually launch (<c>catalog_status</c>), and which launcher games are
+/// installed here but missing from the catalog (<c>installed_games</c>).
 /// </summary>
 public sealed class GameCatalogService
 {
@@ -15,6 +16,7 @@ public sealed class GameCatalogService
     private readonly GameCatalogRepository _repository;
     private readonly GameLaunchResolver _resolver;
     private readonly IGameLibraryLocator _libraries;
+    private readonly IInstalledGameScanner _scanner;
     private readonly IServerConnection _connection;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<GameCatalogService> _logger;
@@ -24,6 +26,7 @@ public sealed class GameCatalogService
         GameCatalogRepository repository,
         GameLaunchResolver resolver,
         IGameLibraryLocator libraries,
+        IInstalledGameScanner scanner,
         IServerConnection connection,
         TimeProvider timeProvider,
         ILogger<GameCatalogService> logger)
@@ -32,6 +35,7 @@ public sealed class GameCatalogService
         _repository = repository;
         _resolver = resolver;
         _libraries = libraries;
+        _scanner = scanner;
         _connection = connection;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -84,7 +88,8 @@ public sealed class GameCatalogService
 
         await _repository.ReplaceAllAsync(accepted, cancellationToken);
 
-        var statuses = EvaluateInstallStatus(accepted);
+        var libraries = _libraries.Discover();
+        var statuses = EvaluateInstallStatus(accepted, libraries);
         _logger.LogInformation(
             "Game catalog synced: {Count} games, {Installed} launchable here, {Rejected} rejected.",
             accepted.Count, statuses.Count(status => status.Installed), rejected.Count);
@@ -94,12 +99,41 @@ public sealed class GameCatalogService
             new CatalogStatusPayload { Games = [.. statuses, .. rejected] },
             AgentJsonContext.Default.CatalogStatusPayload,
             cancellationToken);
+
+        await ReportInstalledGamesAsync(accepted, libraries, cancellationToken);
+    }
+
+    /// <summary>Suggestions for the catalog. A scan failure never fails the sync: the catalog is already applied.</summary>
+    private async Task ReportInstalledGamesAsync(IReadOnlyList<GameCatalogEntity> catalog, GameLibraries libraries, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<DiscoveredGame> games;
+        try
+        {
+            games = InstalledGameScanner.CompareWithCatalog(_scanner.Scan(libraries), catalog);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not scan the installed launcher games.");
+            return;
+        }
+
+        _logger.LogInformation(
+            "Installed launcher games: {Count} found, {Missing} not in the catalog.",
+            games.Count, games.Count(game => !game.InCatalog));
+
+        await _connection.SendAsync(
+            MessageTypes.InstalledGames,
+            new InstalledGamesPayload { Games = games },
+            AgentJsonContext.Default.InstalledGamesPayload,
+            cancellationToken);
     }
 
     /// <summary>Whether each game can be launched on this station right now.</summary>
-    public IReadOnlyList<CatalogGameStatus> EvaluateInstallStatus(IEnumerable<GameCatalogEntity> games)
+    public IReadOnlyList<CatalogGameStatus> EvaluateInstallStatus(IEnumerable<GameCatalogEntity> games) =>
+        EvaluateInstallStatus(games, _libraries.Discover());
+
+    private IReadOnlyList<CatalogGameStatus> EvaluateInstallStatus(IEnumerable<GameCatalogEntity> games, GameLibraries libraries)
     {
-        var libraries = _libraries.Discover();
         return games
             .Select(game =>
             {

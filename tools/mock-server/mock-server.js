@@ -367,6 +367,15 @@ function sendEnvelope(type, payload, customSeq = null, customTs = null) {
 // -------------------------------------------------------------
 // Inbound Message Handler
 // -------------------------------------------------------------
+function printPeripherals(list) {
+    if (!Array.isArray(list)) return;
+    if (list.length === 0) console.log('   • (no watched USB devices)');
+    list.forEach(p => {
+        const state = p.connected ? '[32mconnected[0m' : '[31mDISCONNECTED[0m';
+        console.log(`   • ${String(p.name).padEnd(30)} ${p.vendorProductId}  ${state} since ${p.changedAt}`);
+    });
+}
+
 function handleTextMessage(text, socket) {
     try {
         const env = JSON.parse(text);
@@ -400,6 +409,7 @@ function handleTextMessage(text, socket) {
             console.log(`   • SessionId      : ${env.payload?.sessionId || 'none'}`);
             console.log(`   • RunningGameId  : ${env.payload?.runningGameId || 'none'}`);
             console.log(`   • LeaseExpiresAt : ${env.payload?.leaseExpiresAt || 'none'}`);
+            printPeripherals(env.payload?.peripherals);
         } else if (type === 'heartbeat') {
             console.log(`\x1b[32m[HEARTBEAT]\x1b[0m Locked: ${env.payload?.locked}, SessionId: ${env.payload?.sessionId || 'null'}`);
 
@@ -430,6 +440,16 @@ function handleTextMessage(text, socket) {
                 const state = g.installed ? '\x1b[32minstalled\x1b[0m' : `\x1b[31mnot launchable\x1b[0m (${g.reason})`;
                 console.log(`   • \x1b[1m${String(g.gameId).padEnd(10)}\x1b[0m ${state}`);
             });
+        } else if (type === 'installed_games') {
+            const games = env.payload?.games || [];
+            console.log(`\x1b[36m[INSTALLED_GAMES]\x1b[0m ${games.length} launcher game(s) installed, ${games.filter(g => !g.inCatalog).length} not in the catalog:`);
+            games.forEach(g => {
+                const tag = g.inCatalog ? '\x1b[32min catalog\x1b[0m' : '\x1b[33mnot in catalog\x1b[0m';
+                console.log(`   • ${String(g.name).padEnd(34)} ${g.launchType}:${g.target}${g.processName ? ` (${g.processName})` : ''}  ${tag}`);
+            });
+        } else if (type === 'peripheral_status') {
+            console.log('\x1b[36m[PERIPHERAL_STATUS]\x1b[0m Watched USB devices:');
+            printPeripherals(env.payload?.peripherals);
         } else if (type === 'alert') {
             const a = env.payload || {};
             console.log(`\x1b[31m[ALERT]\x1b[0m ${a.category} / ${a.type} / ${a.severity}: ${a.detail}`);
@@ -466,6 +486,8 @@ function printMenu() {
     console.log(' [a] POLICY_UPDATE: enable USB anti-theft alerts (5s debounce)');
     console.log(' [t] POLICY_UPDATE: temperature thresholds 30°C (expect TEMPERATURE_WARNING alerts)');
     console.log(' [r] POLICY_UPDATE: restore default thresholds (85°C)');
+    console.log(' [w] session_notice LOW_BALANCE: 3 min left (needs an active session, press 2 first)');
+    console.log(' [k] session_notice CLEAR (hide the notice)');
     console.log(' [e] Approve the pending enrollment (station token issued on the next poll)');
     console.log(' [x] Reject the pending enrollment');
     console.log(' [q] Quit');
@@ -540,6 +562,18 @@ rl.on('line', (line) => {
                 sendFrame(activeSocket, 0x01, '{ "type": "LOCK", "this is not": valid json');
                 console.log('\nSent a malformed frame.');
             }
+            break;
+        case 'w':
+            if (!currentSessionId) { console.log('No active session: press 2 (UNLOCK) first.'); break; }
+            sendEnvelope('session_notice', {
+                sessionId: currentSessionId,
+                kind: 'LOW_BALANCE',
+                endsAt: new Date(Date.now() + 3 * 60_000).toISOString()
+            });
+            break;
+        case 'k':
+            if (!currentSessionId) { console.log('No active session.'); break; }
+            sendEnvelope('session_notice', { sessionId: currentSessionId, kind: 'CLEAR' });
             break;
         case 'e':
             decideEnrollment(true);

@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using BaronDesk.Shared.Contracts;
+using BaronDeskAgent.ServiceCore.AntiTheft;
 using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Enrollment;
@@ -29,6 +30,8 @@ public sealed class ConnectionWorker : BackgroundService
     private readonly StationController _station;
     private readonly LoginRelay _loginRelay;
     private readonly EnrollmentService _enrollment;
+    private readonly PeripheralRegistry _peripherals;
+    private readonly ISessionNotifier _notifier;
     private readonly AgentOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ConnectionWorker> _logger;
@@ -41,6 +44,8 @@ public sealed class ConnectionWorker : BackgroundService
         StationController station,
         LoginRelay loginRelay,
         EnrollmentService enrollment,
+        PeripheralRegistry peripherals,
+        ISessionNotifier notifier,
         IOptions<AgentOptions> options,
         TimeProvider timeProvider,
         ILogger<ConnectionWorker> logger)
@@ -52,6 +57,8 @@ public sealed class ConnectionWorker : BackgroundService
         _station = station;
         _loginRelay = loginRelay;
         _enrollment = enrollment;
+        _peripherals = peripherals;
+        _notifier = notifier;
         _options = options.Value;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -148,7 +155,8 @@ public sealed class ConnectionWorker : BackgroundService
             Locked = snapshot.Locked,
             SessionId = snapshot.SessionId,
             RunningGameId = snapshot.RunningGameId,
-            LeaseExpiresAt = snapshot.LeaseExpiresAt
+            LeaseExpiresAt = snapshot.LeaseExpiresAt,
+            Peripherals = _peripherals.Current
         };
 
         await _connection.SendAsync(MessageTypes.StateReport, report, AgentJsonContext.Default.StateReportPayload, cancellationToken);
@@ -191,6 +199,10 @@ public sealed class ConnectionWorker : BackgroundService
 
             case MessageTypes.LoginResult:
                 HandleLoginResult(envelope);
+                return;
+
+            case MessageTypes.SessionNotice:
+                await HandleSessionNoticeAsync(envelope, cancellationToken);
                 return;
 
             default:
@@ -246,6 +258,29 @@ public sealed class ConnectionWorker : BackgroundService
         {
             _logger.LogWarning("Dropped {Type} {Id}: {Error}", envelope.Type, envelope.Id, error);
         }
+    }
+
+    private async Task HandleSessionNoticeAsync(Envelope<JsonElement> envelope, CancellationToken cancellationToken)
+    {
+        if (!IsSequenceValid(envelope, enforceFreshness: true))
+        {
+            return;
+        }
+
+        if (!CommandPayload.TryParseRequired(envelope.Payload, AgentJsonContext.Default.SessionNoticePayload, out var payload, out var error))
+        {
+            _logger.LogWarning("Dropped {Type} {Id}: {Error}", envelope.Type, envelope.Id, error);
+            return;
+        }
+
+        if (!SessionNotices.TryCreate(payload, _station.GetSnapshot().SessionId, _serverClock.UtcNow, out var notice, out var reason))
+        {
+            _logger.LogInformation("Ignored {Type} {Id}: {Reason}", envelope.Type, envelope.Id, reason);
+            return;
+        }
+
+        _logger.LogInformation("Session notice {Kind} ({Remaining} left).", notice!.Kind, notice.Remaining);
+        await _notifier.ShowNoticeAsync(notice, cancellationToken);
     }
 
     private bool IsSequenceValid(Envelope<JsonElement> envelope, bool enforceFreshness)

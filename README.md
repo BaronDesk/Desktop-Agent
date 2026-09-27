@@ -78,12 +78,12 @@ dotnet test BaronDeskAgent.slnx
 La génération a réussi. / Build succeeded.
     0 Warning(s)
     0 Error(s)
-Passed!  - Failed: 0, Passed: 166, Skipped: 0, Total: 166
+Passed!  - Failed: 0, Passed: 189, Skipped: 0, Total: 189
 ```
 
 Warnings are treated as errors, so any warning fails the build.
 
-What the 166 tests cover:
+What the 189 tests cover:
 
 | Test class | Covers |
 |---|---|
@@ -107,6 +107,9 @@ What the 166 tests cover:
 | `GameCatalogRepositoryTests` | launcher fields round trip, `ReplaceAllAsync`, migration v3 keeps old rows |
 | `GameCatalogServiceTests` | sync replaces the catalog, bad entries skipped and reported, `catalog_status`, `CATALOG_UPDATE` and reconnect trigger a sync |
 | `GameServiceTests` | unknown / not-installed games refused before anything is stopped |
+| `InstalledGameScannerTests` | Steam / Epic manifests: installed games found, partial installs, tools and non-games skipped, `inCatalog` matching |
+| `SessionNoticesTests` | `session_notice`: countdown from the server clock, stale sessions and unknown kinds ignored, message cap |
+| `PeripheralStatusContractTests` | `peripheral_status` / `state_report.peripherals` wire shape, registry snapshot |
 
 Run a single class:
 
@@ -153,6 +156,8 @@ Type a menu key and press **Enter** to send something to the agent:
 | `a` | enable USB anti-theft alerts (5 s debounce) | `command_ack` |
 | `t` | temperature thresholds 30 °C | `TEMPERATURE_WARNING` alerts |
 | `r` | restore temperature thresholds 85 °C | `command_ack` |
+| `w` | `session_notice` LOW_BALANCE, 3 min left (press `2` first) | with the LockUI running: amber "Low balance" box bottom-right, counting down |
+| `k` | `session_notice` CLEAR | the box disappears |
 | `q` | quit the mock | agent reconnects with backoff |
 
 The mock also plays the login server: **PIN `1234` is accepted**, anything else is rejected.
@@ -225,7 +230,7 @@ Keep the LockUI **closed** for this step, so you can keep typing in the terminal
 
 | Step | Action | Expected |
 |---|---|---|
-| 5.0 | (on connect, nothing to type) | Mock: `[CATALOG] GET /stations/me/games`, then `[CATALOG_STATUS] 2/6 game(s) launchable`: `charmap`, `calc` installed; `cs2`, `fortnite`, `missing` not launchable with a reason; `invalid` rejected. Needs a station credential: without one the mock answers 401, the agent retries with backoff, and the seeded `charmap` still works. |
+| 5.0 | (on connect, nothing to type) | Mock: `[CATALOG] GET /stations/me/games`, then `[CATALOG_STATUS] 2/6 game(s) launchable`: `charmap`, `calc` installed; `cs2`, `fortnite`, `missing` not launchable with a reason; `invalid` rejected. Then `[INSTALLED_GAMES]`: the Steam / Epic games installed on this PC, each `in catalog` or `not in catalog`. Needs a station credential: without one the mock answers 401, the agent retries with backoff, and the seeded `charmap` still works. |
 | 5.0b | Mock: `c` (CATALOG_UPDATE) | `COMMAND_ACK`, then a second `[CATALOG]` download and `[CATALOG_STATUS]` |
 | 5.1 | Mock: `3` (game while locked) | `COMMAND_NACK EXEC_FAILED`: "The station must be unlocked with an active session to launch a game." |
 | 5.2 | Mock: `2` (UNLOCK) | `COMMAND_ACK`; agent: `Session … is active.` and `Station UNLOCKED` |
@@ -339,9 +344,9 @@ Requires a **wired** USB mouse or keyboard that was plugged in **before** the ag
 | Step | Action | Expected |
 |---|---|---|
 | 8.1 | Mock: `a` (enable anti-theft, 5 s debounce) | `COMMAND_ACK` |
-| 8.2 | Unplug the USB mouse, **replug within 5 s** | No alert (cable flap); agent: `<device> reconnected within the debounce window.` |
-| 8.3 | Unplug it and **wait 6 s** | Mock: `[ALERT] anti_theft / HARDWARE_FAILURE / CRITICAL: Peripheral removed and not reconnected: <name> (VID_…&PID_…).` |
-| 8.4 | Replug it | Watched again, no alert |
+| 8.2 | Unplug the USB mouse, **replug within 5 s** | No alert (cable flap); agent: `<device> reconnected within the debounce window.` Mock: two `[PERIPHERAL_STATUS]` frames, `DISCONNECTED` then `connected` |
+| 8.3 | Unplug it and **wait 6 s** | Mock: `[ALERT] anti_theft / DEVICE_REMOVED / CRITICAL: Peripheral removed and not reconnected: <name> (VID_…&PID_…).` |
+| 8.4 | Replug it | Watched again, no alert; mock `[PERIPHERAL_STATUS]` shows it `connected` (the backend can resolve the alert) |
 | 8.5 | Mock `2` (UNLOCK, a session starts), plug in a **new** USB device, then unplug it | No alert: devices brought during a session belong to the gamer. (A device plugged in while the station is idle joins the watched equipment.) |
 
 Scope: wired USB HID devices only; Bluetooth and wireless dongles are not detected. This is a documented limit (see `docs/TelemetryAlerts.md`).
@@ -501,7 +506,7 @@ Hands-free: `$env:MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS = "3"` approves every new
 
 ## 13. Final Checklist
 
-- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 166 passed
+- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 189 passed
 - [ ] Agent connects: `handshake`, `state_report`, `heartbeat` in `seq` order
 - [ ] `UNKNOWN_TYPE`, replayed `seq`, stale `UNLOCK` rejected; stale `LOCK` executed; malformed frame ignored
 - [ ] Reconnect with growing, jittered delays after the mock stops
