@@ -46,8 +46,8 @@ Docs/                                          tools/mock-server/mock-server.js
 | H3 | Clean close → immediate reconnect; backoff reset on every TCP connect; one malformed frame dropped the link; unbounded frames. | Always back off; reset after 30 s stable; malformed frames ignored; 64 KiB cap; binary rejected. | WebSocketConnection |
 | H4 | Outbox hot-looped offline, died on errors, poison messages blocked it, unbounded. | Waits for a ready connection and a signal; retry delay; dead-letter; 1,000-row cap; never exits. | HardwareTelemetry |
 | H5 | `LOCK`/`END_SESSION` acked without the overlay being shown; no LockUI watchdog; LockUI never failed closed. | Correlated confirmations; `EXEC_FAILED` when unconfirmed; watchdog alert + relaunch; LockUI locks itself 15 s after losing the service. | LockUIAndIPC |
-| H6 | `LOCK` could not cover a fullscreen game; new monitors not covered. | `StopGameOnLock` policy (default on); overlay re-sized on display changes. | SessionCommandsAndSystem, LockUIAndIPC |
-| H7 | Game launch fell back to `Process.Start` as SYSTEM in Session 0; double launch; writable data directory. | No Session-0 fallback; PID resolved while the handle is open; data directory locked down. | SessionCommandsAndSystem, LocalStorage |
+| H6 | `LOCK` could not cover a fullscreen game; new monitors not covered. | `StopGameOnLock` policy (default on); overlay re-sized on display changes. | GamesHandling, SessionCommandsAndSystem, LockUIAndIPC |
+| H7 | Game launch fell back to `Process.Start` as SYSTEM in Session 0; double launch; writable data directory. | No Session-0 fallback; PID resolved while the handle is open; data directory locked down. | GamesHandling, LocalStorage |
 | H8 | Races: USB debounce dictionary on two threads; lock/unlock vs overlay; async multicast event. | Single-reader USB loop; `LockService` serializes state + overlay; events removed. | TelemetryAlerts, SessionAndLeaseControl |
 | H9 | A sensor failure stopped the whole host. | Sensor failures isolated; the agent keeps running. | HardwareTelemetry |
 | H10 | Traffic could precede the handshake; `state_report` waited for a non-frozen `handshake_ack`. | `IsReady` gate; state report always sent; heartbeat right after reconnect. | WebSocketConnection, SessionAndLeaseControl |
@@ -101,7 +101,7 @@ Docs/                                          tools/mock-server/mock-server.js
 - [ ] Alert types `DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING` (were all `HARDWARE_FAILURE`), see `TelemetryAlerts.md`
 - [ ] `peripheral_status` and `state_report.peripherals` (peripheral connection status), see `TelemetryAlerts.md` §3
 - [ ] `session_notice` (low balance / booking ending, shown on the station), see `LockUIAndIPC.md` §4b
-- [ ] `installed_games` (catalog suggestions), see `SessionCommandsAndSystem.md` §2.8
+- [ ] `installed_games` (catalog suggestions), see `GamesHandling.md` §2.8
 
 ---
 

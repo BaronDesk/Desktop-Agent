@@ -153,7 +153,7 @@ Handlers **return** expected failures instead of throwing them.
 | `POLICY_UPDATE` | `PolicyUpdateCommandHandler` | no | `IPolicyStore.UpdatePolicyAsync` |
 | `CATALOG_UPDATE` ⚠ OPEN | `CatalogUpdateCommandHandler` | no | `GameCatalogSyncWorker.RequestSync` (acked once queued; the result follows as `catalog_status`) |
 
-Session, lease and lock semantics are in `SessionAndLeaseControl.md`. Games and power are in `SessionCommandsAndSystem.md`, and policy in `PolicyStore.md`.
+Session, lease and lock semantics are in `SessionAndLeaseControl.md`. Games are in `GamesHandling.md`, power in `SessionCommandsAndSystem.md`, and policy in `PolicyStore.md`.
 
 ---
 
@@ -182,7 +182,7 @@ CommandPayload.TryParseRequired(payload, AgentJsonContext.Default.LoginResultPay
 | `UNLOCK` | `sessionId` | Required, non-empty GUID (never invented) | `INVALID_PAYLOAD` |
 | `UNLOCK` | `leaseSeconds` / `leaseExpiresAt` | Optional; an already-expired lease is refused | `INVALID_PAYLOAD` |
 | `LAUNCH_GAME` | `gameId` | Required, 1–128 characters, catalog id only | `INVALID_PAYLOAD` |
-| `CATALOG_UPDATE` | any | Ignored: the catalog is pulled over HTTPS (`SessionCommandsAndSystem.md` §2) | — |
+| `CATALOG_UPDATE` | any | Ignored: the catalog is pulled over HTTPS (`GamesHandling.md` §2) | — |
 | `SHUTDOWN` | `action` | `"shutdown"` (default) or `"restart"` | `INVALID_PAYLOAD` |
 | `SHUTDOWN` | `delaySeconds` | Integer `0`–`600`, default `2` | `INVALID_PAYLOAD` |
 | `POLICY_UPDATE` | any | At least one known field; unknown fields rejected | `INVALID_PAYLOAD` |

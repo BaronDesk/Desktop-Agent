@@ -104,7 +104,8 @@ A Windows Service runs in Session 0 with no desktop, so it cannot show the lock 
 | Server link, TLS pinning, anti-replay, server clock | [WebSocketConnection.md](WebSocketConnection.md) | `WebSocketConnection`, `ConnectionWorker`, `ReplayGuard`, `ServerClock` |
 | Command pipeline, idempotency, ack/nack | [CommandsHandling.md](CommandsHandling.md) | `CommandDispatcher`, `CommandOutcomeStore`, `ICommandHandler` |
 | Session, lease, fail-closed, heartbeat | [SessionAndLeaseControl.md](SessionAndLeaseControl.md) | `StationController`, `LeaseManager`, `LockService`, `HeartbeatWorker` |
-| Games, process launching, power | [SessionCommandsAndSystem.md](SessionCommandsAndSystem.md) | `GameService`, `InteractiveProcessLauncher`, `SystemPowerService` |
+| Game catalog, launching, process tracking | [GamesHandling.md](GamesHandling.md) | `GameCatalogService`, `GameService`, `InteractiveProcessLauncher` |
+| Session teardown, power | [SessionCommandsAndSystem.md](SessionCommandsAndSystem.md) | `StationController`, `SystemPowerService` |
 | Lock screen, IPC, PIN relay, kiosk | [LockUIAndIPC.md](LockUIAndIPC.md) | `PipeServer`, `LoginRelay`, `PipeClient`, `KeyboardHook` |
 | Sensors, delta telemetry, outbox | [HardwareTelemetry.md](HardwareTelemetry.md) | `HardwareMonitorService`, `TelemetryDeltaFilter`, `OutboxWorker` |
 | Hardware alerts, USB anti-theft | [TelemetryAlerts.md](TelemetryAlerts.md) | `HardwareAlertEvaluator`, `UsbMonitorService` |
@@ -129,19 +130,19 @@ Envelope (frozen): `{ "type", "id", "ts", "seq", "payload" }`. Outbound `seq`/`t
 | agent → server | `alert` | `category, type, severity, detail, occurredAt` | TelemetryAlerts |
 | agent → server | `command_ack` / `command_nack` | `commandId` / `commandId, code, reason` | CommandsHandling |
 | agent → server | `login_request` ⚠ OPEN | `method, credential` | LockUIAndIPC |
-| agent → server | `catalog_status` ⚠ OPEN | `games: [{ gameId, installed, reason? }]` | SessionCommandsAndSystem |
+| agent → server | `catalog_status` ⚠ OPEN | `games: [{ gameId, installed, reason? }]` | GamesHandling |
 | server → agent | `handshake_ack` ⚠ OPEN | `serverTime?` | WebSocketConnection |
 | server → agent | `heartbeat_ack` ⚠ OPEN | `leaseSeconds?, leaseExpiresAt?, serverTime?` | SessionAndLeaseControl |
 | server → agent | `login_result` ⚠ OPEN | `requestId, accepted, reason?` | LockUIAndIPC |
 | server → agent | `UNLOCK` | `sessionId, leaseSeconds?, leaseExpiresAt?, serverTime?` | SessionAndLeaseControl |
 | server → agent | `LOCK` | `reason?` | SessionAndLeaseControl |
 | server → agent | `END_SESSION` | `sessionId?, reason?` | SessionAndLeaseControl |
-| server → agent | `LAUNCH_GAME` | `gameId` | SessionCommandsAndSystem |
+| server → agent | `LAUNCH_GAME` | `gameId` | GamesHandling |
 | server → agent | `SHUTDOWN` | `action?, delaySeconds?, reason?` | SessionCommandsAndSystem |
 | server → agent | `POLICY_UPDATE` | partial `StationPolicy` | PolicyStore |
-| server → agent | `CATALOG_UPDATE` ⚠ OPEN | `{}` (the agent then pulls the catalog) | SessionCommandsAndSystem |
+| server → agent | `CATALOG_UPDATE` ⚠ OPEN | `{}` (the agent then pulls the catalog) | GamesHandling |
 | agent → server (REST, before the WSS link) | `POST /enrollment/request` | `oneTimeToken, mac, ip` + ⚠ OPEN `serialNumber, machineName, agentVersion, agentPublicKey, signedAt, signature` | Enrollment |
-| agent → server (REST, station JWT) | `GET /stations/me/games` ⚠ OPEN | → `{ games: [{ gameId, name, launchType, target, arguments?, workingDirectory?, processName? }] }` | SessionCommandsAndSystem |
+| agent → server (REST, station JWT) | `GET /stations/me/games` ⚠ OPEN | → `{ games: [{ gameId, name, launchType, target, arguments?, workingDirectory?, processName? }] }` | GamesHandling |
 
 ⚠ OPEN items are proposals awaiting confirmation from backend member C (skill document §15).
 

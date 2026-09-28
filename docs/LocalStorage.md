@@ -112,7 +112,7 @@ InitializeAsync()
 |---|---|
 | **v1** | Original schema: `OutboxMessages`, `GameCatalog`, `StationPolicy` (`CREATE … IF NOT EXISTS`, so databases created before versioning adopt it) |
 | **v2** | `StationPolicy.StopGameOnLock` column (default 1); clears `OutboxMessages` (old rows held whole envelopes with a stale `seq`/`ts` that the backend's anti-replay rejects); creates `HandledCommands`; removes the old seeded `notepad` catalog row |
-| **v3** | Launcher-aware catalog: `GameCatalog.ExecutablePath` renamed to `Target`; new `LaunchType` (default `exe`, so existing rows keep working) and `ProcessName` columns (see `SessionCommandsAndSystem.md` §2) |
+| **v3** | Launcher-aware catalog: `GameCatalog.ExecutablePath` renamed to `Target`; new `LaunchType` (default `exe`, so existing rows keep working) and `ProcessName` columns (see `GamesHandling.md` §2) |
 
 Rules for future changes: **add a new migration at the end, never edit a shipped one.**
 
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS HandledCommands
 -- pruned to the last 256 rows on every insert
 ```
 
-The other tables are documented with their features: `OutboxMessages` in `HardwareTelemetry.md`, `GameCatalog` in `SessionCommandsAndSystem.md`, and `StationPolicy` in `PolicyStore.md`.
+The other tables are documented with their features: `OutboxMessages` in `HardwareTelemetry.md`, `GameCatalog` in `GamesHandling.md`, and `StationPolicy` in `PolicyStore.md`.
 
 ---
 
