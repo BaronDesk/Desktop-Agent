@@ -30,6 +30,7 @@ namespace BaronDesk.Shared.Contracts;
 [JsonSerializable(typeof(HeartbeatAckPayload))]
 [JsonSerializable(typeof(LoginResultPayload))]
 [JsonSerializable(typeof(SessionNoticePayload))]
+[JsonSerializable(typeof(StationCredentialPayload))]
 // Server → agent commands
 [JsonSerializable(typeof(UnlockPayload))]
 [JsonSerializable(typeof(LockPayload))]

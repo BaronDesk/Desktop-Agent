@@ -5,6 +5,7 @@ using BaronDesk.Shared.Contracts;
 using BaronDeskAgent.ServiceCore.AntiTheft;
 using BaronDeskAgent.ServiceCore.Commands;
 using BaronDeskAgent.ServiceCore.Configuration;
+using BaronDeskAgent.ServiceCore.Credentials;
 using BaronDeskAgent.ServiceCore.Enrollment;
 using BaronDeskAgent.ServiceCore.Session;
 using Microsoft.Extensions.Options;
@@ -32,6 +33,7 @@ public sealed class ConnectionWorker : BackgroundService
     private readonly EnrollmentService _enrollment;
     private readonly PeripheralRegistry _peripherals;
     private readonly ISessionNotifier _notifier;
+    private readonly IStationCredentialStore _credentials;
     private readonly AgentOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ConnectionWorker> _logger;
@@ -46,6 +48,7 @@ public sealed class ConnectionWorker : BackgroundService
         EnrollmentService enrollment,
         PeripheralRegistry peripherals,
         ISessionNotifier notifier,
+        IStationCredentialStore credentials,
         IOptions<AgentOptions> options,
         TimeProvider timeProvider,
         ILogger<ConnectionWorker> logger)
@@ -59,6 +62,7 @@ public sealed class ConnectionWorker : BackgroundService
         _enrollment = enrollment;
         _peripherals = peripherals;
         _notifier = notifier;
+        _credentials = credentials;
         _options = options.Value;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -205,6 +209,10 @@ public sealed class ConnectionWorker : BackgroundService
                 await HandleSessionNoticeAsync(envelope, cancellationToken);
                 return;
 
+            case MessageTypes.StationCredential:
+                HandleStationCredential(envelope);
+                return;
+
             default:
                 // Commands, and anything unknown (answered with UNKNOWN_TYPE so the backend's command loop closes).
                 await _dispatcher.DispatchAsync(envelope, cancellationToken);
@@ -281,6 +289,23 @@ public sealed class ConnectionWorker : BackgroundService
 
         _logger.LogInformation("Session notice {Kind} ({Remaining} left).", notice!.Kind, notice.Remaining);
         await _notifier.ShowNoticeAsync(notice, cancellationToken);
+    }
+
+    private void HandleStationCredential(Envelope<JsonElement> envelope)
+    {
+        if (!IsSequenceValid(envelope, enforceFreshness: true))
+        {
+            return;
+        }
+
+        if (!CommandPayload.TryParseRequired(envelope.Payload, AgentJsonContext.Default.StationCredentialPayload, out var payload, out var error))
+        {
+            // The parse error could quote the token: log the frame, not the error.
+            _logger.LogWarning("Dropped {Type} {Id}: malformed payload.", envelope.Type, envelope.Id);
+            return;
+        }
+
+        CredentialRenewal.TryStore(_credentials, payload, _logger);
     }
 
     private bool IsSequenceValid(Envelope<JsonElement> envelope, bool enforceFreshness)

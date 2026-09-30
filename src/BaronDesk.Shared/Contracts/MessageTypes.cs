@@ -28,6 +28,9 @@ public static class MessageTypes
 
     // Server → agent control frames. OPEN (skill §15 item 3): not in the frozen list yet, confirm with backend member C.
     public const string HandshakeAck = "handshake_ack";
+
+    // Server → agent: a renewed station JWT (no ack), stored for the next connect.
+    public const string StationCredential = "station_credential";
     public const string HeartbeatAck = "heartbeat_ack";
     public const string LoginResult = "login_result";
 
