@@ -102,7 +102,7 @@ Backend Server
 
 `LAUNCH_GAME` only ever executes entries of the local catalog, **never a path taken from a command payload**. The backend owns the catalog; SQLite is the station's copy, so games still launch while the backend is briefly unreachable.
 
-> The current backend implements `CATALOG_UPDATE`, `GET /stations/me/games` and `catalog_status` with the shapes below, and sends `CATALOG_UPDATE` by itself to every online station whose resolved catalog changed. It does **not** handle `installed_games` yet: it ignores the frame (debug log only).
+> The current backend implements `CATALOG_UPDATE`, `GET /stations/me/games` and `catalog_status` with the shapes below, and sends `CATALOG_UPDATE` by itself to every online station whose resolved catalog changed. It also stores `installed_games` per station (`station_installed_games`): staff see them, matched against the catalog, as the source for "add to catalog" (`GET /api/v1/games/installed`).
 
 ### 2.1 Delivery
 
@@ -331,16 +331,13 @@ The backend refuses a launch request itself (HTTP 409/404, nothing is sent to th
 
 The agent checks the same things again on its side: the backend's view can be a few seconds old.
 
-### 5.2 `UNLOCK` contract mismatch (⚠ OPEN)
+### 5.2 `UNLOCK` contract (settled)
 
-`LAUNCH_GAME` needs an unlocked station with a session, so a test always starts with `UNLOCK`. The two sides do not agree on its payload yet:
+`LAUNCH_GAME` needs an unlocked station with a session, so a test starts with a gamer logging in. The backend now follows the agent's design:
 
-| Backend sends | Agent does |
-|---|---|
-| no payload / `{}` ("direct admin unlock") | `COMMAND_NACK INVALID_PAYLOAD` "sessionId is required.": the agent never invents a session id |
-| `{ sessionId, pin }` ("booking unlock") | Ignores `pin` (unknown field) and **unlocks immediately**, with the policy's default lease. The PIN is never checked |
-
-The agent's PIN design is different: the backend verifies the PIN from a `login_request` sent by the LockUI (see `LockUIAndIPC.md` §4), and `UNLOCK` means "already authorised". Until backend member C and the agent team settle one design, test with the booking form (`pin=` in the monitor), and remember that any PIN unlocks.
+- The PIN comes with the gamer's booking (shown in their app). The LockUI relays it as `login_request`; the backend checks it and answers `login_result`.
+- Only after an accepted login does the backend send `UNLOCK { sessionId, leaseSeconds, serverTime }`. No PIN ever travels in `UNLOCK`.
+- A staff Unlock from the dashboard resumes the station's own session with the same payload. With no session the backend refuses it (`409 NO_SESSION_TO_UNLOCK`) and sends nothing, so the agent never sees an `UNLOCK` without a `sessionId`.
 
 ### 5.3 Test run with the real backend
 
@@ -458,5 +455,5 @@ Fault injection (dev only): `cmd LAUNCH_GAME STATION-DEV-01 game=charmap exec_fa
 - [x] Single tracked game with graceful close, then process-tree kill
 - [x] Game stopped on every teardown, after the overlay; on `LOCK` by policy (`StopGameOnLock`)
 - [x] Discovery of installed Steam / Epic games (`installed_games`)
-- [ ] `installed_games` handled by the backend (currently ignored)
-- [ ] `UNLOCK` payload agreed with backend member C (§5.2)
+- [x] `installed_games` handled by the backend (stored per station, the staff's "add to catalog" source)
+- [x] `UNLOCK` payload agreed with the backend (§5.2)

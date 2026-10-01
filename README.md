@@ -99,6 +99,7 @@ What the 189 tests cover:
 | `TelemetryDeltaFilterTests` | only changes sent, full snapshot before the 30 s backend TTL |
 | `PipeLineReaderTests` | IPC messages capped at 4 KiB |
 | `DpapiStationCredentialStoreTests` | encryption, file ACL, fail-closed on corrupt blobs, never logged |
+| `CredentialRenewalTests` | `station_credential`: the renewed token is stored for the next connect, an empty one ignored, never logged |
 | `DpapiStationKeyStoreTests` | station key pair persists, never in plain text, unreadable key → new identity |
 | `EnrollmentServiceTests` | first-contact enrollment: signed request, PENDING polling, ENROLLED / REJECTED, retries, tokens never logged |
 | `GameCatalogValidatorTests` | every catalog field checked: exe paths, Steam app ids, Epic AppNames, arguments, reserved process names |

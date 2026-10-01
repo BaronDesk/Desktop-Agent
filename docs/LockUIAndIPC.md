@@ -107,11 +107,16 @@ Desktop-Agent
 | Outcome | Meaning | Lock screen text |
 |---|---|---|
 | `Accepted` | Backend accepted; `UNLOCK` follows | "PIN accepted — unlocking…" |
-| `Rejected` | Backend refused (`detail` = reason) | reason, or "Incorrect PIN. Please try again." |
+| `Rejected` | Backend refused (`detail` = reason) | reason, or "Incorrect PIN. Please try again." See the note below |
 | `Unavailable` | No backend connection: no new sessions offline | "Service unavailable — please ask the staff for help." |
 | `Timeout` | No `login_result` within 15 s | "The server did not answer. Please try again." |
 | `RateLimited` | 5 rejections → 30 s lockout (`detail` = seconds) | "Too many attempts. Try again in Ns." |
 | `Busy` | A previous login is still pending | "Please wait…" |
+
+> **Known gap:** the backend's `login_result.reason` is a code, and the lock screen shows it as is. The codes are:
+> `invalid_pin`, `pin_used`, `pin_expired`, `too_many_attempts`, `no_pending_session` (no booking has started on
+> this PC), `insufficient_funds` (balance below the minimum play time), `unsupported_method` and `unavailable`.
+> A gamer then reads `insufficient_funds` instead of a sentence. `LoginRelay` should map each code to text.
 
 ### Message Format
 
@@ -257,7 +262,11 @@ While the gamer plays, the backend can ask the station to show a small warning b
 running out, or the booked time ends soon. The notice is **informational only**: the backend still decides and
 locks with `LOCK` / `END_SESSION` at run-out.
 
-### Wire Message (⚠ OPEN, skill §15: agent proposal, confirm with backend member C)
+### Wire Message (confirmed: the backend sends exactly this)
+
+The backend sends `LOW_BALANCE` when its run-out warning fires (`endsAt` = when the station locks), `TIME_LEFT`
+10 minutes before the booking ends (`SESSION_ENDING_NOTICE_MINUTES`, once per session), and `CLEAR` after a
+top-up or an extend. `message` is always `null` for now. The gamer's app gets the same notices.
 
 Server &rarr; agent control frame (not a command: no ack), replay-checked like every inbound frame:
 
@@ -435,6 +444,7 @@ For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOC
 - [x] Service watchdog: alert and relaunch when the helper is missing
 - [x] `dotnet build` succeeds with 0 warnings (warnings as errors) across all projects
 - [x] In-session notice (`session_notice` → `SessionNotice` → corner box with countdown), never takes focus
-- [ ] `login_request` / `login_result` shapes confirmed with backend member C (OPEN)
-- [ ] `session_notice` shape confirmed with backend member C (OPEN)
+- [x] `login_request` / `login_result` shapes confirmed with the backend
+- [x] `session_notice` shape confirmed with the backend
+- [ ] `login_result` reason codes mapped to gamer-friendly text (shown as raw codes today)
 - [ ] LockUI launched at sign-in by the Windows Service (roadmap branch 9)

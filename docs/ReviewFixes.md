@@ -90,18 +90,22 @@ Docs/                                          tools/mock-server/mock-server.js
 
 ---
 
-## 5. Still OPEN (confirm with backend member C)
+## 5. Contract items with the backend
 
-- [ ] `login_request` / `login_result` message shapes (skill §15 item 2)
-- [ ] `handshake_ack` / `heartbeat_ack` payloads, lease terms and `serverTime` (item 3)
-- [ ] Station credential transport (item 1) and the enrollment answer shape: agent side built, see `Enrollment.md` §4 (item 8, roadmap branch 4)
-- [ ] Game catalog delivery (item 9)
+Checked against the backend on 2026-10-01 (backend `docs/STATION_AGENT.md`, `docs/FLOW_FIXES.md`):
+
+- [x] `login_request` / `login_result` message shapes (skill §15 item 2)
+- [x] `handshake_ack` (`{}`) / `heartbeat_ack` (`{ leaseSeconds, serverTime }`) payloads and lease terms (item 3)
+- [x] Station credential transport: the station JWT in the upgrade's `Authorization` header, renewed by `station_credential` (item 1)
+- [ ] The enrollment answer shape: agent side built, see `Enrollment.md` §4 (item 8, roadmap branch 4)
+- [x] Game catalog delivery: `GET /stations/me/games`, `CATALOG_UPDATE`, `catalog_status` (item 9)
 - [ ] Final lease duration, grace, cadences and thresholds (item 10)
 - [ ] `END_SESSION` semantics (item 12) and whether `LOCK` should stop the game (`StopGameOnLock`, default on)
-- [ ] Alert types `DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING` (were all `HARDWARE_FAILURE`), see `TelemetryAlerts.md`
-- [ ] `peripheral_status` and `state_report.peripherals` (peripheral connection status), see `TelemetryAlerts.md` §3
-- [ ] `session_notice` (low balance / booking ending, shown on the station), see `LockUIAndIPC.md` §4b
-- [ ] `installed_games` (catalog suggestions), see `GamesHandling.md` §2.8
+- [x] Alert types `DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING`: the backend stores `type` as sent (free text)
+- [x] `peripheral_status` and `state_report.peripherals`: stored on the machine, shown on the staff station page
+- [x] `session_notice` (low balance / booking ending), see `LockUIAndIPC.md` §4b
+- [x] `installed_games` (catalog suggestions), see `GamesHandling.md` §2.8
+- [x] `station_credential` (token renewal), see `CredentialStore.md`
 
 ---
 
@@ -110,4 +114,4 @@ Docs/                                          tools/mock-server/mock-server.js
 - [x] All critical, high and medium findings fixed
 - [x] `dotnet build` with 0 warnings (warnings as errors), 77 tests passing
 - [x] End-to-end run against the mock server (handshake, commands, drift, replay, malformed frames, reconnect)
-- [ ] OPEN contract items above confirmed with the backend
+- [ ] OPEN contract items above confirmed with the backend (left: the enrollment answer shape, lease durations and cadences, `END_SESSION` / `StopGameOnLock`)

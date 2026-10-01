@@ -71,6 +71,24 @@ Provisioning (elevated prompt)            Enrollment (first connection, Enrollme
 
 ---
 
+### Renewal (`station_credential`)
+
+The backend renews the credential itself: right after `handshake_ack`, when the station's token has less than
+30 days left, it sends a control frame (no ack) with a fresh token of the same credential version:
+
+```json
+{ "type": "station_credential", "payload": { "stationToken": "<new station JWT>" } }
+```
+
+`ConnectionWorker` replay-checks it (freshness enforced) and hands it to `CredentialRenewal.TryStore`, which
+saves it through `IStationCredentialStore.SaveToken`. The current connection keeps going; the next connect reads
+the new token. An empty or invalid token is ignored (the stored one stays), and the token is never logged.
+
+A rotation by an admin (`POST /machines/:id/rotate-token` on the backend) bumps the station's credential
+version, so the old token stops being admitted: the station must then be given the new one.
+
+---
+
 ## 2. IStationCredentialStore
 
 ```csharp
@@ -226,6 +244,9 @@ var token = _credentials.TryGetToken() ?? _options.StationToken;
 
 `AgentOptionsValidatorTests.A_plain_text_station_token_is_development_only` covers the configuration rule.
 
+`CredentialRenewalTests`: the renewed token is stored for the next connect; an empty one is ignored and the
+current one kept; neither a refused nor a stored token ever reaches the logs.
+
 ---
 
 ## Current Status
@@ -239,5 +260,6 @@ var token = _credentials.TryGetToken() ?? _options.StationToken;
 - [x] `--set-station-token` (stdin or hidden input) / `--clear-station-token`, elevation required
 - [x] Plain-text `StationToken` rejected outside Development
 - [x] Unit tests, including "never on disk in plain text" and "never in logs"
+- [x] Renewal: `station_credential` from the backend replaces the stored token (`CredentialRenewal`)
 - [x] Enrollment flow: one-time token → admin approval → credential issued (agent side, see `Enrollment.md`; response shape OPEN with backend C, skill §15 item 8)
-- [ ] Credential transport confirmed with backend member C: upgrade header vs handshake (OPEN, skill §15 item 1)
+- [x] Credential transport confirmed with the backend: the station JWT in the upgrade's `Authorization` header (backend `docs/STATION_AGENT.md` §2)

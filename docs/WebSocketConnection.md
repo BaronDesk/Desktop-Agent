@@ -113,6 +113,8 @@ CryptographicOperations.FixedTimeEquals(actual, pinned)
 
 The upgrade request carries the station JWT from `IStationCredentialStore` (DPAPI, see `CredentialStore.md`), read on **every** connect so a rotated credential is used without a restart. `Agent:StationToken` in configuration is a Development-only fallback.
 
+The backend renews it: a token with less than 30 days left is answered, after `handshake_ack`, by a `station_credential { stationToken }` frame. The agent stores it and uses it from the next connect (`CredentialStore.md`, Renewal).
+
 ---
 
 ## 3. Connection Lifecycle & Reconnection
@@ -204,7 +206,10 @@ Because `seq` is assigned under the same lock that serializes sends, frames alwa
 - `agentVersion` is the assembly informational version.
 - The credential is never in the payload; it travels on the upgrade request (OPEN, skill §15 item 1).
 
-### Server → Agent (`handshake_ack`) ⚠ OPEN
+### Server → Agent (`handshake_ack`)
+
+The backend sends `handshake_ack` with an empty payload (`{}`), so the clock comes from the envelope `ts`. The
+example below shows the optional `serverTime` the agent also accepts.
 
 ```json
 {
@@ -281,6 +286,8 @@ One malformed frame no longer tears the connection down, and an oversized frame 
 | `handshake_ack` | `ServerClock.Synchronize` |
 | `heartbeat_ack` | `ServerClock.Synchronize` + `StationController.RenewLease` (see `SessionAndLeaseControl.md`) |
 | `login_result` | `LoginRelay.Complete` (see `LockUIAndIPC.md`) |
+| `session_notice` | `SessionNotices` → LockUI corner box (see `LockUIAndIPC.md` §4b) |
+| `station_credential` | `CredentialRenewal.TryStore` (see `CredentialStore.md`) |
 | anything else | `CommandDispatcher` (allow-list → `UNKNOWN_TYPE` nack for unknown types) |
 
 ---
@@ -381,4 +388,5 @@ For `wss://` and pinning: `MOCK_TLS_CERT=cert.pem MOCK_TLS_KEY=key.pem node tool
 - [x] Malformed, binary and oversized (64 KiB) frames ignored without dropping the connection
 - [x] Failed connects dispose their socket (no leak per retry)
 - [x] Unit tests: replay guard, backoff bounds, options validation
-- [ ] `handshake_ack` / `heartbeat_ack` / `login_result` shapes confirmed with backend member C (OPEN, skill §15 item 3)
+- [x] `handshake_ack` (`{}`), `heartbeat_ack` (`{ leaseSeconds, serverTime }`) and `login_result` shapes confirmed against the backend (`docs/STATION_AGENT.md` §3.4)
+- [x] `station_credential` renewal handled
