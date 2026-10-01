@@ -1,6 +1,6 @@
 # BaronDesk Agent : Policy Store & Live Configuration Architecture
 
-This document describes the current implementation of the station policy: its model and defaults, strict `POLICY_UPDATE` parsing and validation, SQLite persistence, and live propagation to running services in `BaronDeskAgent.ServiceCore`.
+This document describes the station policy: its model and defaults, strict `POLICY_UPDATE` parsing and validation, SQLite persistence, and live propagation to running services in `BaronDeskAgent.ServiceCore`.
 
 ---
 
@@ -82,7 +82,7 @@ Desktop-Agent
 
 ## 1. StationPolicy Model
 
-`StationPolicy` is an immutable `record`. Its property initializers are the **single source of defaults**. Before, defaults were duplicated in four places (`AgentOptions`, `StationPolicy`, the seed SQL and `PolicyStore`), and the `AgentOptions` values were never actually used.
+`StationPolicy` is an immutable `record`. Its property initializers are the **single source of defaults**: no other file (configuration, seed SQL, store) repeats them, so they cannot drift apart.
 
 | Property | Default | Valid Range |
 |---|---|---|
@@ -106,8 +106,8 @@ public IReadOnlyList<string> Validate();                                        
 
 ### Validation Rules
 
-- Every numeric field must be **finite** and inside its range. Checks are written as `!(IsFinite(v) && v >= min && v <= max)`, so `NaN` fails. With the old `v is < min or > max` pattern, `NaN` passed every check.
-- `HeartbeatIntervalSeconds × 2 ≤ DefaultLeaseDurationSeconds`: a heartbeat must land well inside the lease, or sessions lock between two heartbeats (tightened from "strictly less than").
+- Every numeric field must be **finite** and inside its range. Checks are written as `!(IsFinite(v) && v >= min && v <= max)`, so `NaN` fails. A check written as `v is < min or > max` would let `NaN` through, because every comparison with `NaN` is false.
+- `HeartbeatIntervalSeconds × 2 ≤ DefaultLeaseDurationSeconds`: a heartbeat must land well inside the lease, or sessions lock between two heartbeats.
 - A rejected update changes nothing (not in memory, not in SQLite).
 
 ---
@@ -138,13 +138,13 @@ public IReadOnlyList<string> Validate();                                        
 | Rule | Example | Result |
 |---|---|---|
 | camelCase names (case-insensitive) | `"heartbeatIntervalSeconds": 10` | applied |
-| Unknown field | `"heartbeatIntervalSecs": 10` | `INVALID_PAYLOAD` (a typo is no longer silently ignored) |
+| Unknown field | `"heartbeatIntervalSecs": 10` | `INVALID_PAYLOAD` (a typo is never silently ignored) |
 | Number sent as a string | `"telemetryCadenceSeconds": "2.5"` | `INVALID_PAYLOAD` |
 | No policy field at all | `{}` | `INVALID_PAYLOAD` |
 | Out of range / `NaN` | `"cpuLoadAlertThreshold": 150` | `INVALID_PAYLOAD` with every violated rule |
 | SQLite write fails | — | `EXEC_FAILED`, policy unchanged |
 
-The old parser accepted four aliases per field (camelCase, snake_case and two short forms), with no defined winner when two were present. It also parsed strings with the PC's **current culture**: on a French Windows `"2.5"` failed to parse, the field was dropped, and the command was still acknowledged as applied. `JsonUnmappedMemberHandling.Disallow` and strict number handling remove both problems.
+Two design choices make parsing predictable. `JsonUnmappedMemberHandling.Disallow` gives each field exactly one name, so a misspelled or aliased field is refused rather than guessed. Strict number handling never reads numbers from strings, so the result does not depend on the PC's language settings (on a French Windows, `"2.5"` would otherwise fail to parse and the field would be silently dropped).
 
 ---
 
@@ -207,18 +207,18 @@ Program.InitializeLocalStateAsync (before any worker starts)
                                           (lock enforcement never depends on SQLite)
 ```
 
-A policy loaded from disk is now **validated** too, so a corrupted or tampered row cannot, for example, set a one-hour lease.
+A policy loaded from disk is **validated** too, so a corrupted or tampered row cannot, for example, set a one-hour lease.
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] Immutable `StationPolicy` record as the single source of defaults
-- [x] Finite-range validation (`NaN`/`Infinity` rejected) and heartbeat ≤ half-lease invariant
-- [x] Strict `POLICY_UPDATE` parsing: canonical camelCase, unknown fields and string numbers rejected
-- [x] Empty update → `INVALID_PAYLOAD`; persistence failure → `EXEC_FAILED`
-- [x] Serialized updates; subscribers isolated from each other's failures
-- [x] Live propagation to heartbeat, telemetry, alerts, lease, anti-theft and lock behaviour
-- [x] Stored policy validated on startup; safe fallbacks when SQLite fails
-- [x] New `StopGameOnLock` policy (migration v2)
-- [x] Unit tests for defaults, bounds, `NaN`, invariant and partial `Apply`
+- Immutable `StationPolicy` record as the single source of defaults
+- Finite-range validation (`NaN`/`Infinity` rejected) and heartbeat ≤ half-lease invariant
+- Strict `POLICY_UPDATE` parsing: canonical camelCase, unknown fields and string numbers rejected
+- Empty update → `INVALID_PAYLOAD`; persistence failure → `EXEC_FAILED`
+- Serialized updates; subscribers isolated from each other's failures
+- Live propagation to heartbeat, telemetry, alerts, lease, anti-theft and lock behaviour
+- Stored policy validated on startup; safe fallbacks when SQLite fails
+- New `StopGameOnLock` policy (migration v2)
+- Unit tests for defaults, bounds, `NaN`, invariant and partial `Apply`

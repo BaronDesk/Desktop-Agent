@@ -1,6 +1,6 @@
 # BaronDesk Agent : Local Storage & Schema Migrations Architecture
 
-This document describes the current implementation of the agent's local data: the SQLite database, the protection of the data directory, versioned schema migrations, and startup initialization in `BaronDeskAgent.ServiceCore`.
+This document describes the agent's local data: the SQLite database, the protection of the data directory, versioned schema migrations, and startup initialization in `BaronDeskAgent.ServiceCore`.
 
 ---
 
@@ -84,7 +84,7 @@ public sealed class AgentDatabase
 ```
 
 - `Microsoft.Data.Sqlite` directly (no EF Core) for footprint.
-- Connections are pooled by the provider. The old `Cache=Shared` was removed (discouraged together with WAL).
+- Connections are pooled by the provider. `Cache=Shared` is not used (it is discouraged together with WAL).
 - `OpenConnectionAsync` disposes the connection if opening fails.
 - All SQL is parameterized; timestamps use `CultureInfo.InvariantCulture` and the round-trip (`"O"`) format.
 
@@ -172,13 +172,13 @@ static async Task InitializeLocalStateAsync(IServiceProvider provider, IHostEnvi
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] Single SQLite database (WAL) for outbox, catalog, policy and handled command ids
-- [x] Data directory restricted to SYSTEM and Administrators when running as a service
-- [x] Files planted by other users detected and removed at startup
-- [x] Versioned, transactional, append-only migrations (`PRAGMA user_version`)
-- [x] Development-only sample data; no test entries in production databases
-- [x] Invariant-culture timestamps; parameterized SQL everywhere
-- [x] Local state initialized before any worker starts
-- [x] Station credential kept out of SQLite (DPAPI file)
+- Single SQLite database (WAL) for outbox, catalog, policy and handled command ids
+- Data directory restricted to SYSTEM and Administrators when running as a service
+- Files planted by other users detected and removed at startup
+- Versioned, transactional, append-only migrations (`PRAGMA user_version`)
+- Development-only sample data; no test entries in production databases
+- Invariant-culture timestamps; parameterized SQL everywhere
+- Local state initialized before any worker starts
+- Station credential kept out of SQLite (DPAPI file)

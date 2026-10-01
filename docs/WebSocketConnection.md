@@ -1,6 +1,6 @@
 # BaronDesk Agent : WebSocket Connection Architecture
 
-This document describes the current implementation and architecture of the WebSocket communication layer in `BaronDeskAgent.ServiceCore`: the pinned WSS link, the connection lifecycle, the server clock, app-level anti-replay and frame handling.
+This document describes the WebSocket communication layer in `BaronDeskAgent.ServiceCore`: the pinned WSS link, the connection lifecycle, the server clock, app-level anti-replay and frame handling.
 
 ---
 
@@ -132,8 +132,8 @@ Start ConnectionWorker
          │                                                │
          ▼                                                │
  SendHandshakeAsync()                                     │
- SendStateReportAsync()     ◄── always, not gated on an   │
-         │                      OPEN handshake_ack        │
+ SendStateReportAsync()     ◄── always, without waiting   │
+         │                      for handshake_ack         │
          ▼                                                │
  MarkReady()  ──► ReadyChanged(true)                       │
          │        (heartbeat, outbox flush, LockUI status) │
@@ -150,7 +150,7 @@ Start ConnectionWorker
 ### Backoff Rules
 
 - Exponential with **equal jitter**: `capped = min(base × 2^(attempt−1), max)`, delay = `capped/2 + random × capped/2`.
-- The attempt counter resets only after a connection stayed up for **30 seconds**. A server that accepts TCP and closes immediately (station not enrolled, credential revoked) is no longer hammered in a tight loop.
+- The attempt counter resets only after a connection stayed up for **30 seconds**. A server that accepts TCP and closes immediately (station not enrolled, credential revoked) is never hammered in a tight loop.
 - Defaults: `ReconnectBaseDelaySeconds = 2`, `ReconnectMaxDelaySeconds = 30`.
 
 ### The Ready Gate
@@ -204,7 +204,7 @@ Because `seq` is assigned under the same lock that serializes sends, frames alwa
 
 - `serialNumber` defaults to the machine name when `Agent:SerialNumber` is empty.
 - `agentVersion` is the assembly informational version.
-- The credential is never in the payload; it travels on the upgrade request (OPEN, skill §15 item 1).
+- The credential is never in the payload; it travels on the upgrade request.
 
 ### Server → Agent (`handshake_ack`)
 
@@ -250,7 +250,7 @@ Before the first synchronization it equals the local clock. The heartbeat ack re
 
 ## 7. App-Level Anti-Replay Guard
 
-`ReplayGuard` validates **every** inbound frame: commands and control frames alike. Before the review, `heartbeat_ack` skipped it, so a replayed ack could keep extending the lease.
+`ReplayGuard` validates **every** inbound frame: commands and control frames alike. Checking control frames matters: a replayed `heartbeat_ack` could otherwise keep extending the lease.
 
 ```csharp
 public ReplayCheck Validate(long seq, DateTimeOffset ts, bool enforceFreshness = true);
@@ -277,7 +277,7 @@ public ReplayCheck Validate(long seq, DateTimeOffset ts, bool enforceFreshness =
 | `Malformed` | Invalid JSON, missing `type`/`id`, binary frame, or larger than 64 KiB (drained) | Log a warning, **keep the connection** |
 | `Closed` | Close frame or socket not open | Leave the receive loop, back off, reconnect |
 
-One malformed frame no longer tears the connection down, and an oversized frame cannot exhaust memory.
+A malformed frame never tears the connection down, and an oversized frame cannot exhaust memory.
 
 ### Frame Routing
 
@@ -373,20 +373,19 @@ For `wss://` and pinning: `MOCK_TLS_CERT=cert.pem MOCK_TLS_KEY=key.pem node tool
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] Pinned certificate WSS client (`WebSocketConnection`), constant-time SHA-256 comparison
-- [x] Pinning mandatory outside Development; unsafe options rejected at startup (`AgentOptionsValidator`)
-- [x] Station JWT from the DPAPI credential store on every connect
-- [x] `seq` and `ts` stamped inside the send lock (strict wire order for every sender)
-- [x] Reused JSON writer and receive buffer (no per-frame buffers)
-- [x] Hosted connection lifecycle worker (`ConnectionWorker`)
-- [x] Backoff with equal jitter after every disconnect; reset only after a stable connection
-- [x] Handshake and `state_report` on every (re)connect; `IsReady` gate for all other traffic
-- [x] Server clock offset from `handshake_ack` / `heartbeat_ack` (`ServerClock`)
-- [x] Anti-replay on every inbound frame (`ReplayGuard`); restrictive commands exempt from freshness only
-- [x] Malformed, binary and oversized (64 KiB) frames ignored without dropping the connection
-- [x] Failed connects dispose their socket (no leak per retry)
-- [x] Unit tests: replay guard, backoff bounds, options validation
-- [x] `handshake_ack` (`{}`), `heartbeat_ack` (`{ leaseSeconds, serverTime }`) and `login_result` shapes confirmed against the backend (`docs/STATION_AGENT.md` §3.4)
-- [x] `station_credential` renewal handled
+- Pinned certificate WSS client (`WebSocketConnection`), constant-time SHA-256 comparison
+- Pinning mandatory outside Development; unsafe options rejected at startup (`AgentOptionsValidator`)
+- Station JWT from the DPAPI credential store on every connect
+- `seq` and `ts` stamped inside the send lock (strict wire order for every sender)
+- Reused JSON writer and receive buffer (no per-frame buffers)
+- Hosted connection lifecycle worker (`ConnectionWorker`)
+- Backoff with equal jitter after every disconnect; reset only after a stable connection
+- Handshake and `state_report` on every (re)connect; `IsReady` gate for all other traffic
+- Server clock offset from `handshake_ack` / `heartbeat_ack` (`ServerClock`)
+- Anti-replay on every inbound frame (`ReplayGuard`); restrictive commands exempt from freshness only
+- Malformed, binary and oversized (64 KiB) frames ignored without dropping the connection
+- Failed connects dispose their socket (no leak per retry)
+- `station_credential` renewal: the backend's renewed token is stored for the next connect
+- Unit tests: replay guard, backoff bounds, options validation

@@ -1,9 +1,96 @@
 # BaronDesk Desktop Agent
 
-C# / .NET 10 agent that runs on every gaming PC of a BaronDesk venue. It executes backend commands over a pinned WSS channel, enforces the paid-access lock screen, streams hardware telemetry and raises hardware / anti-theft alerts, with a minimal footprint.
+The BaronDesk Desktop Agent runs on every gaming PC ("station") of a BaronDesk gaming centre. It keeps the PC locked until the backend grants a paid session, launches the games the venue offers, reports the PC's health, and raises an alert when hardware overheats or equipment is unplugged. It is written in C# on .NET 10, secure by default, and designed to stay light on the gamer's machine.
 
-- **Design:** [docs/Architecture.md](docs/Architecture.md) (overview and index of every component document)
-- **Review fixes and open contract items:** [docs/ReviewFixes.md](docs/ReviewFixes.md)
+---
+
+## What It Does
+
+| Capability | In short |
+|---|---|
+| **Paid access** | A fullscreen lock screen covers every monitor. The gamer types the PIN of their booking; the backend checks it and unlocks the station for the paid time. |
+| **Session control** | The station stays unlocked only while it holds a valid lease from the backend, and locks itself when the lease runs out, the network drops, or anything goes wrong. |
+| **Remote commands** | Staff lock, unlock, end a session, launch a game or shut a PC down from the dashboard. |
+| **Games** | The venue's game catalog is synced from the backend; games start in the gamer's session through their executable, Steam or the Epic Games Launcher, and are closed when the session ends. |
+| **In-session notices** | A small corner box warns the gamer before the station locks (low balance, booking ending). |
+| **Telemetry** | CPU, GPU, RAM and fan readings are sent to the dashboard, only when they change. |
+| **Alerts** | Overheating, sustained overload, removed USB equipment (anti-theft) and lock-screen tampering raise alerts, kept offline until they can be delivered. |
+| **Enrollment** | A new PC joins the venue with a one-time token and admin approval, and gets its own credential, renewed automatically. |
+
+---
+
+## How It Fits in BaronDesk
+
+```text
+ Admin app (staff)        Gamer portal (bookings, PIN)
+         │                          │
+         └────────────┬─────────────┘
+                      ▼
+          BaronDesk backend (NestJS)
+                      │  pinned WSS link · station credential
+                      ▼
+ ┌──────────── Gaming PC ─────────────────────────────────┐
+ │  BaronDeskAgent.ServiceCore  (Session 0: the authority) │
+ │      connection · commands · session · games · sensors  │
+ │                      │  locked-down named pipe          │
+ │  BaronDesk.LockUI            (user session: the screen) │
+ │      lock overlay · PIN box · notices                   │
+ └─────────────────────────────────────────────────────────┘
+```
+
+The service core holds the connection and every decision; the LockUI only draws the overlay and forwards what the gamer types. The full design is in [docs/Architecture.md](docs/Architecture.md).
+
+---
+
+## Security Highlights
+
+- **The agent decides nothing:** PINs, balances and sessions are checked by the backend. The station only obeys `UNLOCK` / `LOCK`.
+- **Fail closed:** the station starts locked and locks again on any expired lease, lost connection or broken component.
+- **Pinned TLS:** the server certificate is pinned; on a mismatch nothing, not even the credential, leaves the PC.
+- **Protected identity:** the station credential and key pair are stored with Windows DPAPI in files only SYSTEM and Administrators can read; enrollment requests are signed with the station's own ECDSA key.
+- **Anti-replay:** every inbound frame is checked for sequence and freshness against the server clock.
+- **Allow-listed commands only:** seven commands, matched exactly; games run only from the synced catalog, never from a path in a command.
+- **Locked-down IPC:** only the service and the signed-in console user can use the lock screen pipe.
+- **No secrets in logs or the local database.**
+
+The September 2026 security and quality review, with every finding and fix, is in [docs/ReviewFixes.md](docs/ReviewFixes.md).
+
+---
+
+## Technology
+
+| Area | Choice |
+|---|---|
+| Language / runtime | C# on .NET 10 (`net10.0-windows`), nullable enabled, warnings as errors |
+| Hosting | `Microsoft.Extensions.Hosting` (hosted background workers) |
+| Lock screen | WPF, low-level keyboard hook |
+| Local storage | SQLite (`Microsoft.Data.Sqlite`, WAL), versioned migrations |
+| Hardware sensors | LibreHardwareMonitorLib |
+| Secrets | Windows DPAPI (`System.Security.Cryptography.ProtectedData`) |
+| Serialization | `System.Text.Json` source generation |
+| Devices | CfgMgr32 / SetupAPI device notifications (P/Invoke) |
+| Test backend | Zero-dependency Node.js mock server |
+
+---
+
+## Documentation
+
+| Document | Covers |
+|---|---|
+| [Architecture](docs/Architecture.md) | Overview, processes, design principles, wire protocol, startup, configuration |
+| [WebSocketConnection](docs/WebSocketConnection.md) | Server link, TLS pinning, reconnection, server clock, anti-replay |
+| [CommandsHandling](docs/CommandsHandling.md) | Command pipeline, allow-list, idempotency, acknowledgements |
+| [SessionAndLeaseControl](docs/SessionAndLeaseControl.md) | Sessions, lease, heartbeat, fail-closed locking |
+| [SessionCommandsAndSystem](docs/SessionCommandsAndSystem.md) | Session teardown, shutdown |
+| [GamesHandling](docs/GamesHandling.md) | Game catalog, launching, process tracking, installed-game discovery |
+| [LockUIAndIPC](docs/LockUIAndIPC.md) | Lock screen, named-pipe IPC, PIN login, kiosk mode, notices |
+| [HardwareTelemetry](docs/HardwareTelemetry.md) | Sensors, delta telemetry, offline outbox |
+| [TelemetryAlerts](docs/TelemetryAlerts.md) | Hardware alerts, USB anti-theft, peripheral status |
+| [PolicyStore](docs/PolicyStore.md) | Station policy and live updates |
+| [CredentialStore](docs/CredentialStore.md) | DPAPI station credential and its renewal |
+| [Enrollment](docs/Enrollment.md) | First connection of a new PC |
+| [LocalStorage](docs/LocalStorage.md) | SQLite database, data directory, migrations |
+| [ReviewFixes](docs/ReviewFixes.md) | Security and quality review |
 
 ---
 
@@ -27,7 +114,7 @@ Desktop-Agent
 
 # Local Testing Guide
 
-This guide takes you through testing everything on your own PC, from the automated tests to the lock screen, alerts, TLS pinning and the DPAPI credential. Each step says what to do and what you should see.
+This guide walks through testing every feature on a single Windows PC, from the automated tests to the lock screen, alerts, TLS pinning and the DPAPI credential. Each step says what to do and what you should see.
 
 ## Contents
 
@@ -44,7 +131,7 @@ This guide takes you through testing everything on your own PC, from the automat
 10. [Test TLS certificate pinning and production validation](#10-test-tls-certificate-pinning-and-production-validation)
 11. [Test the station credential (DPAPI)](#11-test-the-station-credential-dpapi) and [enrollment](#11b-test-enrollment-first-connection)
 12. [Troubleshooting](#12-troubleshooting)
-13. [Final checklist](#13-final-checklist)
+13. [What this guide demonstrates](#13-what-this-guide-demonstrates)
 
 ---
 
@@ -78,12 +165,12 @@ dotnet test BaronDeskAgent.slnx
 La génération a réussi. / Build succeeded.
     0 Warning(s)
     0 Error(s)
-Passed!  - Failed: 0, Passed: 189, Skipped: 0, Total: 189
+Passed!  - Failed: 0, Passed: 193, Skipped: 0, Total: 193
 ```
 
 Warnings are treated as errors, so any warning fails the build.
 
-What the 189 tests cover:
+What the 193 tests cover:
 
 | Test class | Covers |
 |---|---|
@@ -505,22 +592,22 @@ Hands-free: `$env:MOCK_AUTO_APPROVE_ENROLLMENT_SECONDS = "3"` approves every new
 
 ---
 
-## 13. Final Checklist
+## 13. What This Guide Demonstrates
 
-- [ ] `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 189 passed
-- [ ] Agent connects: `handshake`, `state_report`, `heartbeat` in `seq` order
-- [ ] `UNKNOWN_TYPE`, replayed `seq`, stale `UNLOCK` rejected; stale `LOCK` executed; malformed frame ignored
-- [ ] Reconnect with growing, jittered delays after the mock stops
-- [ ] UNLOCK → Character Map launch → END_SESSION closes it
-- [ ] Mock down while unlocked → station locks after lease + grace
-- [ ] LockUI windowed mode (6A): wrong PIN rejected by the backend, `1234` unlocks, 5 failures → 30 s lockout, LOCK acknowledged
-- [ ] LockUI kiosk mode (6B): fullscreen on every monitor, escape keys blocked, auto-relock brings the overlay back
-- [ ] LOCK shows the overlay and closes the running game
-- [ ] Mock down → "Service unavailable", no login possible
-- [ ] Agent killed → LockUI locks itself after 15 s; second LockUI instance exits
-- [ ] Telemetry sends only changes; `t` raises one temperature alert per sensor
-- [ ] Alert raised offline is delivered after reconnecting
-- [ ] USB unplug > 5 s raises an `anti_theft` alert; a quick replug does not
-- [ ] Invalid `POLICY_UPDATE` → `INVALID_PAYLOAD`; valid one persists across restarts
-- [ ] Correct pin connects; wrong pin aborts with no credential sent; production refuses to start without a pin
-- [ ] DPAPI: token stored encrypted, file ACL SYSTEM/Administrators only, `[AUTH]` shown by the mock, removed with `--clear-station-token`
+- `dotnet build`: 0 warnings, 0 errors; `dotnet test`: 193 passed
+- Agent connects: `handshake`, `state_report`, `heartbeat` in `seq` order
+- `UNKNOWN_TYPE`, replayed `seq`, stale `UNLOCK` rejected; stale `LOCK` executed; malformed frame ignored
+- Reconnect with growing, jittered delays after the mock stops
+- UNLOCK → Character Map launch → END_SESSION closes it
+- Mock down while unlocked → station locks after lease + grace
+- LockUI windowed mode (6A): wrong PIN rejected by the backend, `1234` unlocks, 5 failures → 30 s lockout, LOCK acknowledged
+- LockUI kiosk mode (6B): fullscreen on every monitor, escape keys blocked, auto-relock brings the overlay back
+- LOCK shows the overlay and closes the running game
+- Mock down → "Service unavailable", no login possible
+- Agent killed → LockUI locks itself after 15 s; second LockUI instance exits
+- Telemetry sends only changes; `t` raises one temperature alert per sensor
+- Alert raised offline is delivered after reconnecting
+- USB unplug > 5 s raises an `anti_theft` alert; a quick replug does not
+- Invalid `POLICY_UPDATE` → `INVALID_PAYLOAD`; valid one persists across restarts
+- Correct pin connects; wrong pin aborts with no credential sent; production refuses to start without a pin
+- DPAPI: token stored encrypted, file ACL SYSTEM/Administrators only, `[AUTH]` shown by the mock, removed with `--clear-station-token`

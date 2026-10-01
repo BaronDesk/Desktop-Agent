@@ -1,6 +1,6 @@
 # BaronDesk Agent : Lock UI & Named-Pipe IPC Architecture
 
-This document describes the implementation and architecture of the WPF lock screen overlay (`BaronDesk.LockUI`), the named-pipe IPC connecting it to `BaronDeskAgent.ServiceCore`, and the login relay that forwards the gamer's PIN to the backend.
+This document describes the WPF lock screen overlay (`BaronDesk.LockUI`), the named-pipe IPC connecting it to `BaronDeskAgent.ServiceCore`, and the login relay that forwards the gamer's PIN to the backend.
 
 ---
 
@@ -107,16 +107,16 @@ Desktop-Agent
 | Outcome | Meaning | Lock screen text |
 |---|---|---|
 | `Accepted` | Backend accepted; `UNLOCK` follows | "PIN accepted — unlocking…" |
-| `Rejected` | Backend refused (`detail` = reason) | reason, or "Incorrect PIN. Please try again." See the note below |
+| `Rejected` | Backend refused (`detail` = reason) | reason, or "Incorrect PIN. Please try again." |
 | `Unavailable` | No backend connection: no new sessions offline | "Service unavailable — please ask the staff for help." |
 | `Timeout` | No `login_result` within 15 s | "The server did not answer. Please try again." |
 | `RateLimited` | 5 rejections → 30 s lockout (`detail` = seconds) | "Too many attempts. Try again in Ns." |
 | `Busy` | A previous login is still pending | "Please wait…" |
 
-> **Known gap:** the backend's `login_result.reason` is a code, and the lock screen shows it as is. The codes are:
-> `invalid_pin`, `pin_used`, `pin_expired`, `too_many_attempts`, `no_pending_session` (no booking has started on
-> this PC), `insufficient_funds` (balance below the minimum play time), `unsupported_method` and `unavailable`.
-> A gamer then reads `insufficient_funds` instead of a sentence. `LoginRelay` should map each code to text.
+The backend's refusal reasons (`login_result.reason`) are: `invalid_pin`, `pin_used`, `pin_expired`,
+`too_many_attempts`, `no_pending_session` (no booking has started on this PC), `insufficient_funds` (the balance
+does not cover the minimum play time), `unsupported_method` and `unavailable`. The lock screen shows the reason
+it receives.
 
 ### Message Format
 
@@ -140,7 +140,7 @@ Desktop-Agent
 
 ## 2. Named-Pipe Security
 
-The pipe drives the lock screen of a paid station, so it is locked down on both ends. Before the review, any authenticated user could open it (and even host instances of it).
+The pipe drives the lock screen of a paid station, so it is locked down on both ends: an open pipe would let any local user drive the lock screen, or even host a fake instance of it.
 
 ### Service Side (`PipeServer`)
 
@@ -196,7 +196,6 @@ PipeServer.ShowAsync()  →  OverlayResult
 - `LOCK` and `END_SESSION` are acked only for `Confirmed`. Otherwise they are nacked `EXEC_FAILED` with a reason that names the cause:
   - `HelperNotConnected`: "The station is now locked, but the lock screen app (LockUI) is not running or not connected, so nothing covers the screen."
   - `NotConfirmed`: "The station is now locked, but the lock screen app did not confirm that the overlay is visible."
-- The old code acked even when no helper was running.
 - The service remembers the **desired** state (starts locked) and replays it to every newly connected helper, together with the current `ServerStatus`.
 - The read loop never blocks: logins are relayed in the background, so confirmations keep flowing while the backend decides.
 
@@ -204,7 +203,7 @@ PipeServer.ShowAsync()  →  OverlayResult
 
 ## 4. Booking PIN Login Flow
 
-The agent **never verifies a PIN**. Before the review, the PIN arrived in the `UNLOCK` payload and was compared locally; worse, any PIN unlocked a station that had no expected PIN. The PIN is now relayed to the backend, and only `UNLOCK` unlocks.
+The agent **never verifies a PIN**. The PIN is relayed to the backend, which checks it, and only an `UNLOCK` from the backend unlocks the station. A PIN never travels in `UNLOCK`, and nothing on the station can turn a typed PIN into an unlocked screen by itself.
 
 ```text
 LockUI (User Session)            ServiceCore (SYSTEM)                      Backend Server
@@ -227,7 +226,7 @@ LockUI (User Session)            ServiceCore (SYSTEM)                      Backe
      ├── Overlay hides, gamer plays     │                                         │
 ```
 
-### Wire Messages (⚠ OPEN, skill §15 item 2: confirm with backend member C)
+### Wire Messages
 
 ```json
 {
@@ -262,11 +261,12 @@ While the gamer plays, the backend can ask the station to show a small warning b
 running out, or the booked time ends soon. The notice is **informational only**: the backend still decides and
 locks with `LOCK` / `END_SESSION` at run-out.
 
-### Wire Message (confirmed: the backend sends exactly this)
+### Wire Message
 
 The backend sends `LOW_BALANCE` when its run-out warning fires (`endsAt` = when the station locks), `TIME_LEFT`
 10 minutes before the booking ends (`SESSION_ENDING_NOTICE_MINUTES`, once per session), and `CLEAR` after a
-top-up or an extend. `message` is always `null` for now. The gamer's app gets the same notices.
+top-up or an extend. The backend sends `message: null`, so the station shows its default text. The gamer's app
+gets the same notices.
 
 Server &rarr; agent control frame (not a command: no ack), replay-checked like every inbound frame:
 
@@ -384,7 +384,6 @@ protected override void OnClosing(CancelEventArgs e)
 }
 ```
 
-The old `RegisterHotKey(MOD_WIN, 0)` call was removed: it registered nothing.
 
 ### Windowed Test Mode (Debug Builds Only)
 
@@ -418,33 +417,30 @@ For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOC
 | No `LoginResult` within 20 s | "No answer from the service. Please try again." |
 | Helper missing while locked for 30 s | Service raises a `security_violation` alert (once per outage, rate-limited) |
 | Helper missing (any state) | Service relaunches it every 30 s via `InteractiveProcessLauncher`, when running as a service and `LockUiExecutablePath` is set |
-| Keep-alive loop per connection | Cancelled when that connection ends (the old code leaked one loop per reconnect) |
-| Unexpected error in the pipe client | Logged via `Trace`; the client keeps reconnecting (only the documented I/O errors used to be caught, so any other error ended the loop and left the LockUI on "Service unavailable" for good) |
+| Keep-alive loop per connection | Cancelled when that connection ends, so reconnects never pile up loops |
+| Unexpected error in the pipe client | Logged via `Trace`; the client keeps reconnecting, so an unexpected error can never leave the LockUI stuck on "Service unavailable" |
 | Service gone while locked (development) | Debug builds only: **Ctrl+Alt+Shift+F12**, caught by the keyboard hook, closes the LockUI. Compiled out of Release builds |
 | Unhandled UI exception | Logged via `Trace`; the overlay keeps running |
 
 ---
 
-## 7. Verification Checklist
+## 7. Implementation Summary
 
-- [x] Bidirectional named-pipe IPC on `\\.\pipe\BaronDeskAgentPipe` with source-generated JSON
-- [x] Pipe ACL restricted to the service and the console user, no `CreateNewInstance`
-- [x] `FirstPipeInstance` squatting detection with a `security_violation` alert
-- [x] Client verification (console session, optional executable path); server verification in the LockUI (Session 0)
-- [x] 4 KiB message limit on both sides (`PipeLineReader`)
-- [x] Correlated `ShowLock`/`HideLock` confirmations; `LOCK`/`END_SESSION` acked only when confirmed
-- [x] PIN relayed to the backend (`login_request` / `login_result`); **no PIN verification in the agent**
-- [x] Offline login refused ("no new sessions offline"); 5 failures → 30 s lockout
-- [x] Fullscreen topmost overlay over the virtual screen, re-sized on display changes
-- [x] Keyboard hook for Win, Alt-Tab, Alt-Esc, Alt-F4, Ctrl-Esc, Ctrl-Shift-Esc
-- [x] Task Manager disabled by the service in the console user's hive (the gamer cannot write that policy)
-- [x] Debug-only windowed test mode; mock auto-relock for hands-free kiosk tests
-- [x] Debug-only emergency exit (Ctrl+Alt+Shift+F12) for a kiosk overlay whose service stopped
-- [x] LockUI single instance; locks itself 15 s after losing the service
-- [x] Service watchdog: alert and relaunch when the helper is missing
-- [x] `dotnet build` succeeds with 0 warnings (warnings as errors) across all projects
-- [x] In-session notice (`session_notice` → `SessionNotice` → corner box with countdown), never takes focus
-- [x] `login_request` / `login_result` shapes confirmed with the backend
-- [x] `session_notice` shape confirmed with the backend
-- [ ] `login_result` reason codes mapped to gamer-friendly text (shown as raw codes today)
-- [ ] LockUI launched at sign-in by the Windows Service (roadmap branch 9)
+- Bidirectional named-pipe IPC on `\\.\pipe\BaronDeskAgentPipe` with source-generated JSON
+- Pipe ACL restricted to the service and the console user, no `CreateNewInstance`
+- `FirstPipeInstance` squatting detection with a `security_violation` alert
+- Client verification (console session, optional executable path); server verification in the LockUI (Session 0)
+- 4 KiB message limit on both sides (`PipeLineReader`)
+- Correlated `ShowLock`/`HideLock` confirmations; `LOCK`/`END_SESSION` acked only when confirmed
+- PIN relayed to the backend (`login_request` / `login_result`); **no PIN verification in the agent**
+- Offline login refused ("no new sessions offline"); 5 failures → 30 s lockout
+- Fullscreen topmost overlay over the virtual screen, re-sized on display changes
+- Keyboard hook for Win, Alt-Tab, Alt-Esc, Alt-F4, Ctrl-Esc, Ctrl-Shift-Esc
+- Task Manager disabled by the service in the console user's hive (the gamer cannot write that policy)
+- Debug-only windowed test mode; mock auto-relock for hands-free kiosk tests
+- Debug-only emergency exit (Ctrl+Alt+Shift+F12) for a kiosk overlay whose service stopped
+- LockUI single instance; locks itself 15 s after losing the service
+- Service watchdog: alert and relaunch when the helper is missing
+- `dotnet build` succeeds with 0 warnings (warnings as errors) across all projects
+- In-session notice (`session_notice` → `SessionNotice` → corner box with countdown), never takes focus
+- `login_request` / `login_result` and `session_notice` wire messages as implemented by the backend

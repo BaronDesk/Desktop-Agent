@@ -1,6 +1,6 @@
 # BaronDesk Agent : Session & Lease Control Architecture
 
-This document describes the current implementation and architecture of session lifecycle tracking, lease management, presence heartbeats and fail-closed enforcement in `BaronDeskAgent.ServiceCore`.
+This document describes session lifecycle tracking, lease management, presence heartbeats and fail-closed enforcement in `BaronDeskAgent.ServiceCore`.
 
 ---
 
@@ -115,7 +115,7 @@ Every 5 s (ITimer from TimeProvider)
                                                └── end the session ("lease_expired")
 ```
 
-The check covers more than offline expiry. **Any** path that could leave the station unlocked without a lease is closed within 5 seconds: before the review, a PIN typed at an idle station unlocked it with no session, and nothing ever locked it again.
+The check covers more than offline expiry. **Any** path that could leave the station unlocked without a lease is closed within 5 seconds, whatever caused it: the invariant is checked, not assumed.
 
 ### SessionService
 
@@ -139,7 +139,7 @@ UNLOCK / heartbeat_ack
  Lease duration from SERVER-CLOCK values only
    leaseSeconds                    (preferred)
    leaseExpiresAt − serverTime     (serverTime, else the envelope ts)
-   none given → policy default     (OPEN)
+   none given → policy default
           │
           ├── ≤ 0 (already expired) ──► NOT renewed
           │
@@ -155,7 +155,7 @@ UNLOCK / heartbeat_ack
 ### Why These Rules?
 
 - **Monotonic clock:** changing the Windows clock cannot extend a lease.
-- **Server-clock arithmetic:** the old code converted `leaseExpiresAt` with the *local* clock. A station 5 minutes behind the server got a 6-minute lease; a station ahead of it got a fresh full lease from an already-expired one.
+- **Server-clock arithmetic:** converting `leaseExpiresAt` with the *local* clock would be wrong. A station 5 minutes behind the server would get a 6-minute lease; a station ahead of it would get a fresh full lease from an already-expired one.
 - **Cap:** a bogus or malicious value cannot hand out hours of free play.
 
 ### LeaseManager API
@@ -194,7 +194,7 @@ Other fail-closed rules
 
 ### LockService
 
-`LockService` owns the lock flag and serializes it with the overlay commands, so a concurrent lock and unlock can no longer leave the overlay hidden while the station is locked:
+`LockService` owns the lock flag and serializes it with the overlay commands, so a concurrent lock and unlock can never leave the overlay hidden while the station is locked:
 
 ```csharp
 public bool IsLocked { get; }                               // starts true
@@ -258,7 +258,7 @@ Heartbeat contract (`HeartbeatPayload.cs`):
 }
 ```
 
-Server acknowledgement (`HeartbeatAckPayload`, ⚠ OPEN):
+Server acknowledgement (`HeartbeatAckPayload`), as the backend sends it:
 
 ```json
 {
@@ -279,17 +279,17 @@ Server acknowledgement (`HeartbeatAckPayload`, ⚠ OPEN):
 
 ## 7. State Report on Reconnection
 
-Right after the handshake, on every (re)connect, and without waiting for `handshake_ack` (which the frozen contract does not define):
+Right after the handshake, on every (re)connect, and without waiting for `handshake_ack`:
 
 ```text
 Agent                                       Server
   │                                           │
   │─── handshake ────────────────────────────►│
   │─── state_report ─────────────────────────►│
-  │    { locked, sessionId,                   │
-  │      runningGameId, leaseExpiresAt }      │
+  │    { locked, sessionId, runningGameId,    │
+  │      leaseExpiresAt, peripherals }        │
   │─── heartbeat ────────────────────────────►│
-  │◄── handshake_ack { serverTime } ──────────│
+  │◄── handshake_ack {} ──────────────────────│
 ```
 
 State report contract (`StateReportPayload.cs`):
@@ -304,10 +304,13 @@ State report contract (`StateReportPayload.cs`):
     "locked": true,
     "sessionId": null,
     "runningGameId": null,
-    "leaseExpiresAt": null
+    "leaseExpiresAt": null,
+    "peripherals": []
   }
 }
 ```
+
+`peripherals` lists the watched USB devices and whether each is connected (see `TelemetryAlerts.md`).
 
 After a crash or power cut the agent restarts locked with no session, and the backend reconciles billing from its own persisted `start_time`.
 
@@ -315,7 +318,7 @@ After a crash or power cut the agent restarts locked with no session, and the ba
 
 ## 8. Configuration
 
-Lease and heartbeat timing are **backend-tuned policy**, changed with `POLICY_UPDATE` and persisted (see `PolicyStore.md`). They are no longer in `appsettings.json`.
+Lease and heartbeat timing are **backend-tuned policy**, changed with `POLICY_UPDATE` and persisted (see `PolicyStore.md`). They are not part of `appsettings.json`.
 
 | Policy field | Default | Bounds |
 |---|---|---|
@@ -366,16 +369,16 @@ services.AddHostedService<HeartbeatWorker>();
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] `StationController` owns every lock/session/lease/game transition under one gate
-- [x] Invariant *unlocked ⇒ valid lease* enforced every 5 s
-- [x] Monotonic lease; duration from server-clock values only; capped; never renewed when expired
-- [x] Fail-closed boot, lease expiry, and LockUI-side fail-close
-- [x] `UNLOCK` requires a session id and replaces a different active session cleanly
-- [x] `LOCK` stops the game by policy; `END_SESSION` ignores stale session ids
-- [x] Lock state and overlay serialized (`LockService`), overlay confirmation reported honestly
-- [x] Heartbeats on a policy-driven timer, plus immediately after every reconnect
-- [x] `state_report` on every (re)connect
-- [x] Unit tests with a fake `TimeProvider`
-- [ ] Lease terms in `heartbeat_ack` confirmed with backend member C (OPEN, skill §15 items 3 & 10)
+- `StationController` owns every lock/session/lease/game transition under one gate
+- Invariant *unlocked ⇒ valid lease* enforced every 5 s
+- Monotonic lease; duration from server-clock values only; capped; never renewed when expired
+- Fail-closed boot, lease expiry, and LockUI-side fail-close
+- `UNLOCK` requires a session id and replaces a different active session cleanly
+- `LOCK` stops the game by policy; `END_SESSION` ignores stale session ids
+- Lock state and overlay serialized (`LockService`), overlay confirmation reported honestly
+- Heartbeats on a policy-driven timer, plus immediately after every reconnect
+- `state_report` on every (re)connect
+- Lease terms taken from `heartbeat_ack` (`leaseSeconds`, `serverTime`)
+- Unit tests with a fake `TimeProvider`

@@ -102,7 +102,7 @@ Backend Server
 
 `LAUNCH_GAME` only ever executes entries of the local catalog, **never a path taken from a command payload**. The backend owns the catalog; SQLite is the station's copy, so games still launch while the backend is briefly unreachable.
 
-> The current backend implements `CATALOG_UPDATE`, `GET /stations/me/games` and `catalog_status` with the shapes below, and sends `CATALOG_UPDATE` by itself to every online station whose resolved catalog changed. It also stores `installed_games` per station (`station_installed_games`): staff see them, matched against the catalog, as the source for "add to catalog" (`GET /api/v1/games/installed`).
+> The backend implements `CATALOG_UPDATE`, `GET /stations/me/games` and `catalog_status` with the shapes below, and sends `CATALOG_UPDATE` by itself to every online station whose resolved catalog changed. It also stores `installed_games` per station: staff see them, matched against the catalog, as the source for "add to catalog".
 
 ### 2.1 Delivery
 
@@ -195,7 +195,7 @@ Existing rows become `exe` entries (see `LocalStorage.md`).
 ### 2.6 Seeding
 
 - **Development only:** `DevelopmentDataSeeder` adds `charmap` → `%SystemRoot%\System32\charmap.exe` (Character Map), so `LAUNCH_GAME { "gameId": "charmap" }` works before any sync. The first sync replaces it with the server's catalog. Not Notepad: on Windows 11 `notepad.exe` is a stub that exits, and the Notepad app restores the developer's own documents, which a test session end must never close.
-- Production databases are never seeded; migration v2 removed the old `notepad` row.
+- Production databases are never seeded.
 
 ### 2.7 Tamper Protection
 
@@ -257,10 +257,10 @@ Launch(exe, args, workDir)
 
 Steam and the Epic launcher are started the same way, so they run as the signed-in gamer, never as SYSTEM.
 
-Security fixes compared to the previous launcher:
+Security properties of the launcher:
 
-- **No Session-0 fallback.** It used to fall back to `Process.Start` when no user was signed in or the token call failed, running the game invisibly as SYSTEM.
-- **No double launch.** If the new process exited before its PID was looked up, the old code started a second copy with `Process.Start`.
+- **No Session-0 fallback.** When no user is signed in, or the token call fails, the launch fails. It never falls back to `Process.Start`, which would run the game invisibly as SYSTEM.
+- **No double launch.** The PID is resolved while the process handle is still open, so a process that exits immediately is reported as a failure instead of being started a second time.
 - Token handles are `SafeAccessTokenHandle`s, and the requested rights are only those needed (`TOKEN_QUERY | DUPLICATE | ASSIGN_PRIMARY | ADJUST_DEFAULT | ADJUST_SESSIONID`).
 
 The same launcher relaunches the LockUI when it dies (see `LockUIAndIPC.md`).
@@ -331,9 +331,9 @@ The backend refuses a launch request itself (HTTP 409/404, nothing is sent to th
 
 The agent checks the same things again on its side: the backend's view can be a few seconds old.
 
-### 5.2 `UNLOCK` contract (settled)
+### 5.2 How a station gets unlocked
 
-`LAUNCH_GAME` needs an unlocked station with a session, so a test starts with a gamer logging in. The backend now follows the agent's design:
+`LAUNCH_GAME` needs an unlocked station with a session, so a test starts with a gamer logging in:
 
 - The PIN comes with the gamer's booking (shown in their app). The LockUI relays it as `login_request`; the backend checks it and answers `login_result`.
 - Only after an accepted login does the backend send `UNLOCK { sessionId, leaseSeconds, serverTime }`. No PIN ever travels in `UNLOCK`.
@@ -341,48 +341,35 @@ The agent checks the same things again on its side: the backend's view can be a 
 
 ### 5.3 Test run with the real backend
 
-**Server PC** (`back-end/`, stack running with `npm run docker:dev`). Get a staff token (valid 15 minutes):
+The run uses the BaronDesk web apps: the **admin app** for staff and the **gamer portal**.
 
-```powershell
-$login = Invoke-RestMethod -Method Post -Uri http://localhost:3000/auth/login `
-  -ContentType 'application/json' `
-  -Body '{"username":"hq-admin","password":"change-me-immediately"}'
-$env:TOKEN = $login.accessToken
-```
+**1. Connect the station.** Enroll the gaming PC as described in `Enrollment.md` (*New stations* page → enrollment token → approve). On approval the agent logs `Station enrolled`, connects, and immediately syncs its catalog: `Game catalog synced: N games, N launchable here, N rejected.` followed by `Installed launcher games: …`.
 
-Mint a station token for the agent (30 days) and copy the printed `eyJ…` line:
+**2. Add and offer a game** (admin app, *Games* page, branch admin or HQ):
 
-```powershell
-npm run monitor -- station-token STATION-DEV-01
-```
+| Field | Value |
+|---|---|
+| Name | `Character Map` |
+| Game id | `charmap` |
+| Launch with | `exe` |
+| Executable path | `C:\Windows\System32\charmap.exe` |
+| Process name | `charmap` |
 
-**Gaming PC** (admin terminal, `Desktop-Agent/`):
+Offer it at the station's branch (or at the station only). The backend sends `CATALOG_UPDATE` by itself, and the agent logs a new `Game catalog synced` line with `charmap` launchable. The *Games* page then shows it as installed on that station.
 
-```powershell
-$env:DOTNET_ENVIRONMENT  = "Development"
-$env:Agent__ServerUrl    = "wss://cstam-server.local/agent-ws"
-$env:Agent__SerialNumber = "STATION-DEV-01"
-$env:Agent__StationToken = "<eyJ… token>"
-dotnet run --project src/BaronDeskAgent.ServiceCore
-```
+**3. Start a session** (gamer portal): the gamer picks *Play now* on the station and gets a PIN, then types it on the station's lock screen. The agent relays it (`login_request`), the backend accepts it (`login_result`), and the agent receives `UNLOCK`: the overlay disappears.
 
-`SerialNumber` must match the token: the backend closes the socket on a mismatch.
+**4. Launch and stop the game** (admin app, the station's page):
 
-**Server PC**, step by step:
-
-| # | Command | Expected |
+| # | Action | Expected |
 |---|---|---|
-| 1 | (agent connects) | Agent: `Game catalog synced: N games, N launchable here, N rejected.` then `Installed launcher games: …` |
-| 2 | `npm run monitor -- games` | The backend catalog |
-| 3 | `npm run monitor -- game-add charmap exe C:\Windows\System32\charmap.exe name=CharMap process=charmap` | Game created (manager+ token) |
-| 4 | `npm run monitor -- game-assign charmap STATION-DEV-01` | The backend sends `CATALOG_UPDATE` by itself; agent logs a new `Game catalog synced` line with charmap launchable |
-| 5 | `npm run monitor -- cmd UNLOCK STATION-DEV-01 pin=0000` | `ack`; station unlocked with a session (see §5.2: the PIN is not checked) |
-| 6 | `npm run monitor -- cmd LAUNCH_GAME STATION-DEV-01 game=charmap` | Agent: `Executing LAUNCH_GAME …`, `Launched CharMap (charmap) via exe.`; Character Map opens on the gaming PC |
-| 7 | `npm run monitor -- cmd LAUNCH_GAME STATION-DEV-01 game=charmap` | No second window (`Game charmap is already running.`) |
-| 8 | `npm run monitor -- cmd LOCK STATION-DEV-01` | Overlay back (with the LockUI running), Character Map closes (`StopGameOnLock`) |
-| 9 | `npm run monitor -- cmd END_SESSION STATION-DEV-01` | Session ended; any game closed |
+| 1 | *Launch game* → `charmap` | Agent: `Executing LAUNCH_GAME …`, `Launched Character Map (charmap) via exe.`; Character Map opens on the gaming PC |
+| 2 | *Launch game* → `charmap` again | No second window (`Game charmap is already running.`) |
+| 3 | *Lock* | Overlay back (with the LockUI running), Character Map closes (`StopGameOnLock`) |
+| 4 | *Unlock* | The gamer's own session resumes |
+| 5 | *End session* | Session ended and billed; any game closed; the station locks |
 
-Fault injection (dev only): `cmd LAUNCH_GAME STATION-DEV-01 game=charmap exec_failed` or `invalid_payload` send a launch the agent is sure to reject, bypassing the backend checks of §5.1.
+For fault injection, the backend accepts a development-only `simulate` option on the command request (`exec_failed`, `invalid_payload`). It sends a launch that the agent is certain to reject, bypassing the backend checks of §5.1.
 
 ### 5.4 Agent log lines
 
@@ -403,13 +390,13 @@ Fault injection (dev only): `cmd LAUNCH_GAME STATION-DEV-01 game=charmap exec_fa
 | Symptom | Cause / Fix |
 |---|---|
 | **No game log lines at all** | The agent never connected, so no sync ran. Look for the WSS connection error first (usually no or invalid station token) |
-| `Game catalog sync failed` … `No station credential is provisioned.` | No DPAPI credential and no `Agent__StationToken`: mint one (§5.3) |
-| `Game catalog sync failed` … `returned HTTP 401.` | Token expired, signed with another backend's secret, or for another serial: mint a new one |
-| `Game catalog synced: 0 games` | Nothing is assigned to this station (`game-assign`) |
-| Monitor: `GAME_STATUS_UNKNOWN` | The agent has not synced since the game was assigned: `cmd CATALOG_UPDATE STATION-DEV-01` |
-| Monitor: `GAME_NOT_INSTALLED` | The agent's reason says why (file missing, Steam app not installed, outside `AllowedGameDirectories`) |
-| Monitor: `STATION_NOT_IN_SESSION` | Unlock first (§5.2 / step 5) |
-| `UNLOCK` → `INVALID_PAYLOAD` "sessionId is required." | Sent without `pin=`, see §5.2 |
+| `Game catalog sync failed` … `No station credential is provisioned.` | The station is not enrolled yet: enroll it (`Enrollment.md`) |
+| `Game catalog sync failed` … `returned HTTP 401.` | The station credential was issued by another backend or for another serial: clear it (`--clear-station-token`) and enroll again |
+| `Game catalog synced: 0 games` | No game is offered at this station or its branch (*Games* page) |
+| Dashboard: `GAME_STATUS_UNKNOWN` | The agent has not synced since the game was offered; it syncs on every reconnect and `CATALOG_UPDATE` |
+| Dashboard: `GAME_NOT_INSTALLED` | The agent's reason says why (file missing, Steam app not installed, outside `AllowedGameDirectories`) |
+| Dashboard: `STATION_NOT_IN_SESSION` | A gamer must log in with a PIN first (§5.2) |
+| Dashboard Unlock → `NO_SESSION_TO_UNLOCK` | Nobody is playing: Unlock only resumes a gamer's session (§5.2) |
 | `LAUNCH_GAME` → `EXEC_FAILED` "…could not be started in the player's session." | Agent running as a service with nobody signed in on the console: games are never started as SYSTEM (§3) |
 
 ---
@@ -419,7 +406,7 @@ Fault injection (dev only): `cmd LAUNCH_GAME STATION-DEV-01 game=charmap exec_fa
 | Component | Edge Case | Handling / Resolution |
 |---|---|---|
 | `LaunchGameCommandHandler` | Launch while locked or without a session | `EXEC_FAILED` ("must be unlocked with an active session") |
-| `LaunchGameCommandHandler` | Missing / non-string / oversized `gameId` | `INVALID_PAYLOAD`; no more guessing from `id`, numbers or `ToString()` |
+| `LaunchGameCommandHandler` | Missing / non-string / oversized `gameId` | `INVALID_PAYLOAD`; the id is never guessed from other fields |
 | `LaunchGameCommandHandler` | Unknown id / not installed / missing executable | `EXEC_FAILED` with a generic reason (no file paths sent to the server) |
 | `GameService` | Requested game not installed while another runs | Refused before anything is stopped |
 | `GameService` | Launcher game (Steam, Epic) | Launcher process never killed; the game is closed by `processName` |
@@ -440,20 +427,18 @@ Fault injection (dev only): `cmd LAUNCH_GAME STATION-DEV-01 game=charmap exec_fa
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] SQLite game catalog; only catalog entries are executed
-- [x] Catalog pulled from the backend (`GET /stations/me/games`) on connect and on `CATALOG_UPDATE`; implemented by the current backend
-- [x] Per-entry validation; bad entries skipped and reported, never blocking the rest
-- [x] `catalog_status`: which games this station can launch, with generic reasons
-- [x] `exe`, `steam` and `epic` launch types; launchers discovered from machine-wide locations only
-- [x] Optional `AllowedGameDirectories` hardening
-- [x] `processName` tracking for launcher games and bootstrappers; launchers never killed
-- [x] Development-only `charmap` seed, replaced by the first sync
-- [x] `CreateProcessAsUser` launch into the console user's session, no Session-0 fallback
-- [x] No double launch; PID resolved while the process handle is open
-- [x] Single tracked game with graceful close, then process-tree kill
-- [x] Game stopped on every teardown, after the overlay; on `LOCK` by policy (`StopGameOnLock`)
-- [x] Discovery of installed Steam / Epic games (`installed_games`)
-- [x] `installed_games` handled by the backend (stored per station, the staff's "add to catalog" source)
-- [x] `UNLOCK` payload agreed with the backend (§5.2)
+- SQLite game catalog; only catalog entries are executed
+- Catalog pulled from the backend (`GET /stations/me/games`) on connect and on `CATALOG_UPDATE`
+- Per-entry validation; bad entries skipped and reported, never blocking the rest
+- `catalog_status`: which games this station can launch, with generic reasons
+- `exe`, `steam` and `epic` launch types; launchers discovered from machine-wide locations only
+- Optional `AllowedGameDirectories` hardening
+- `processName` tracking for launcher games and bootstrappers; launchers never killed
+- Development-only `charmap` seed, replaced by the first sync
+- `CreateProcessAsUser` launch into the console user's session, no Session-0 fallback
+- No double launch; PID resolved while the process handle is open
+- Single tracked game with graceful close, then process-tree kill
+- Game stopped on every teardown, after the overlay; on `LOCK` by policy (`StopGameOnLock`)
+- Discovery of installed Steam / Epic games (`installed_games`), used by staff as the "add to catalog" source

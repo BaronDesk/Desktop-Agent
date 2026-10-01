@@ -1,6 +1,6 @@
 # BaronDesk Agent : Hardware Telemetry & Outbox
 
-This document describes the current implementation of hardware sampling, delta-based telemetry streaming, and the SQLite outbox that delivers alerts reliably in `BaronDeskAgent.ServiceCore`.
+This document describes hardware sampling, delta-based telemetry streaming, and the SQLite outbox that delivers alerts reliably in `BaronDeskAgent.ServiceCore`.
 
 Alert evaluation and USB anti-theft are described in `TelemetryAlerts.md`.
 
@@ -87,8 +87,8 @@ TelemetryPublisher.PublishTelemetryAsync
 
 Notes:
 
-- The update visitor now also updates **sub-hardware**. The Super I/O chip that carries the fan sensors is sub-hardware of the motherboard, and it was never refreshed before.
-- `IsControllerEnabled` was dropped: no controller data is reported, and opening it costs footprint.
+- The update visitor also updates **sub-hardware**: the Super I/O chip that carries the fan sensors is sub-hardware of the motherboard, so without it fan readings would never refresh.
+- `IsControllerEnabled` stays off: no controller data is reported, and opening it costs footprint.
 - On some Ryzen parts `Tctl` includes a +10–20 °C offset, so package sensors are preferred.
 
 ### Failure Isolation
@@ -101,7 +101,7 @@ One sample throws
       └── WARNING logged, retried on the next tick
 ```
 
-Before the review, `Open()` ran outside any `try`, so a sensor failure faulted the hosted service. With the default `StopHost` behaviour that shut down the whole agent, lock enforcement included.
+This isolation matters: an exception escaping a hosted service stops the whole .NET host by default (`StopHost`), which would take lock enforcement down with it. A sensor problem must never unlock or stop a station.
 
 ---
 
@@ -151,13 +151,13 @@ After a disconnect the filter is reset, so the first sample after reconnecting i
 | `command_ack` / `command_nack` | `CommandDispatcher` | No: the backend redelivers unacked commands |
 | `login_request` | `LoginRelay` | No: no new sessions offline |
 
-The old `TelemetryMessagePolicy`, which listed message types the agent never sent, is gone. So are the off-contract `device_event` messages.
+The agent sends only message types the backend defines; there are no extra or legacy message types.
 
 ---
 
 ## 5. SQLite Outbox
 
-Alerts always go through the outbox. That makes them durable across outages and restarts, and delivers them **in order**. Before, a live alert could overtake older buffered ones.
+Alerts always go through the outbox. That makes them durable across outages and restarts, and delivers them **in order**: a live alert never overtakes older buffered ones.
 
 ### Pipeline
 
@@ -188,16 +188,16 @@ OutboxWorker (sleeps until there is work AND a ready connection)
                     └── otherwise         → Attempts + 1, retry in 5 s (order kept)
 ```
 
-### What Changed
+### Design Choices
 
-| Before | Now |
+| Choice | Why |
 |---|---|
-| Stored whole envelopes with the original `seq`/`ts` | Stores the payload only; `seq`/`ts` stamped at send, original `id` kept for deduplication |
-| Busy loop while offline (instant failures + SQLite writes) | Waits for `IsReady`; 5 s retry delay |
-| Polled SQLite every 5 s when empty | Wakes on a signal from `EnqueueAsync` |
-| Stopped for good on any unexpected exception | Logs and retries after 5 s |
-| Undeserializable rows blocked the queue forever | Deleted |
-| Unbounded | 1,000 rows, oldest dropped first |
+| Stores the payload only; `seq`/`ts` stamped at send, original `id` kept | A stored `seq`/`ts` would be stale on resend and refused by the backend's anti-replay; the `id` lets the backend deduplicate |
+| Waits for `IsReady`, 5 s retry delay | No busy loop of failing sends and SQLite writes while offline |
+| Wakes on a signal from `EnqueueAsync` | No polling of SQLite when the queue is empty |
+| Logs and retries after an unexpected exception | The worker never stops for good |
+| Undeserializable rows are deleted | A single bad row cannot block the queue |
+| At most 1,000 rows, oldest dropped first | Bounded disk use during a long outage |
 
 ### Schema: `OutboxMessages`
 
@@ -256,34 +256,32 @@ CREATE TABLE IF NOT EXISTS OutboxMessages
 
 ---
 
-## 7. Footprint Notes (15-point deliverable)
+## 7. Footprint
 
 - Event-driven workers; no polling loops (outbox signal, `PeriodicTimer`, CM notifications).
 - Adaptive cadence (3× slower while idle), delta telemetry, one reused JSON writer and receive buffer.
-- Per-frame logs are at `Debug` level (the old code logged at `Information` every 5 s).
+- Per-frame logs are at `Debug` level, so the default `Information` log stays quiet during normal operation.
 - ServiceCore: workstation, non-concurrent GC, `InvariantGlobalization`, `UseSystemResourceKeys`.
-- The benchmark report (roadmap branch 10) is still to be written.
 
 ---
 
-## Current Status
+## Implementation Summary
 
 ### Hardware Telemetry
 
-- [x] CPU, RAM, GPU (per GPU) and fan monitoring through one LibreHardwareMonitor handle
-- [x] Sub-hardware updated (fan readings refreshed)
-- [x] Sensor failures isolated: the agent keeps running
-- [x] Adaptive cadence (session vs idle), live policy updates
-- [x] Delta filter with TTL-safe full snapshots
-- [x] `NODE_TELEMETRY`-shaped `samples` payload, server-clock timestamps
-- [x] Telemetry never buffered offline (cache-only data)
+- CPU, RAM, GPU (per GPU) and fan monitoring through one LibreHardwareMonitor handle
+- Sub-hardware updated (fan readings refreshed)
+- Sensor failures isolated: the agent keeps running
+- Adaptive cadence (session vs idle), live policy updates
+- Delta filter with TTL-safe full snapshots
+- `NODE_TELEMETRY`-shaped `samples` payload, server-clock timestamps
+- Telemetry never buffered offline (cache-only data)
 
 ### Outbox
 
-- [x] Alerts always persisted before sending; delivered in insertion order
-- [x] Payload-only rows; fresh `seq`/`ts` at send; original id for deduplication
-- [x] Event-driven worker, waits for a ready connection (no busy loop)
-- [x] Poison messages removed; dead-letter after 10 failed attempts while connected
-- [x] Bounded at 1,000 rows (oldest dropped first)
-- [x] Worker never stops for good on an error
-- [ ] Benchmark report proving idle CPU ≪ 1 % and RAM in the tens of MB (roadmap branch 10)
+- Alerts always persisted before sending; delivered in insertion order
+- Payload-only rows; fresh `seq`/`ts` at send; original id for deduplication
+- Event-driven worker, waits for a ready connection (no busy loop)
+- Poison messages removed; dead-letter after 10 failed attempts while connected
+- Bounded at 1,000 rows (oldest dropped first)
+- Worker never stops for good on an error

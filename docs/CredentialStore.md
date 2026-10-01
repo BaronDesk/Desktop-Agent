@@ -1,6 +1,6 @@
 # BaronDesk Agent : Station Credential Store (DPAPI) Architecture
 
-This document describes the current implementation of the station credential storage in `BaronDeskAgent.ServiceCore`: DPAPI encryption at machine scope, file protection, provisioning from the command line, and how the connection uses the credential.
+This document describes the station credential storage in `BaronDeskAgent.ServiceCore`: DPAPI encryption at machine scope, file protection, provisioning from the command line, and how the connection uses the credential.
 
 ---
 
@@ -42,7 +42,7 @@ Desktop-Agent
 
 ## 1. Station Credential Architecture
 
-Two identities exist (ADR-003): the **station** (this machine) and the **user** (the gamer). The station authenticates the connection once with a long-lived **station JWT**; commands are then trusted on that channel.
+Two identities exist: the **station** (this machine) and the **user** (the gamer). The station authenticates the connection once with a long-lived **station JWT**; commands are then trusted on that channel.
 
 ```text
 Provisioning (elevated prompt)            Enrollment (first connection, Enrollment.md)
@@ -218,11 +218,11 @@ var token = _credentials.TryGetToken() ?? _options.StationToken;
 
 ---
 
-## 8. Honest Limits
+## 8. Security Limits
 
 - An **administrator or SYSTEM** attacker on the station can extract the credential. Machine-scope DPAPI cannot prevent this.
-- Mitigation is limiting the blast radius: one credential per station, a revocable, rotatable (ideally short-lived) credential issued by the backend, and least privilege for the service.
-- A stolen station credential exposes **one station's channel**. State this in the security document.
+- The design limits the blast radius instead: one credential per station, which the backend can revoke (station revoke) or retire by rotation (its credential version), and least privilege for the service.
+- A stolen station credential therefore exposes **one station's channel**, never another station or a user account.
 
 ---
 
@@ -249,17 +249,17 @@ current one kept; neither a refused nor a stored token ever reaches the logs.
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] `IStationCredentialStore` abstraction
-- [x] DPAPI `LocalMachine` encryption with purpose entropy; plaintext buffers zeroed
-- [x] Protected file ACL (SYSTEM + Administrators), atomic write with the final ACL
-- [x] Token format validation (header-safe) on save and on read
-- [x] Fail closed on missing, corrupt, foreign or cloned credentials
-- [x] Token read on every connect (rotation without restart)
-- [x] `--set-station-token` (stdin or hidden input) / `--clear-station-token`, elevation required
-- [x] Plain-text `StationToken` rejected outside Development
-- [x] Unit tests, including "never on disk in plain text" and "never in logs"
-- [x] Renewal: `station_credential` from the backend replaces the stored token (`CredentialRenewal`)
-- [x] Enrollment flow: one-time token → admin approval → credential issued (agent side, see `Enrollment.md`; response shape OPEN with backend C, skill §15 item 8)
-- [x] Credential transport confirmed with the backend: the station JWT in the upgrade's `Authorization` header (backend `docs/STATION_AGENT.md` §2)
+- `IStationCredentialStore` abstraction
+- DPAPI `LocalMachine` encryption with purpose entropy; plaintext buffers zeroed
+- Protected file ACL (SYSTEM + Administrators), atomic write with the final ACL
+- Token format validation (header-safe) on save and on read
+- Fail closed on missing, corrupt, foreign or cloned credentials
+- Token read on every connect (rotation without restart)
+- `--set-station-token` (stdin or hidden input) / `--clear-station-token`, elevation required
+- Plain-text `StationToken` rejected outside Development
+- Unit tests, including "never on disk in plain text" and "never in logs"
+- Renewal: `station_credential` from the backend replaces the stored token (`CredentialRenewal`)
+- Enrollment flow: one-time token → admin approval → credential issued (see `Enrollment.md`)
+- Credential transport: the station JWT in the WSS upgrade's `Authorization` header, never in a message payload

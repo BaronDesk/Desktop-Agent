@@ -1,6 +1,6 @@
 # BaronDesk Agent : Session Teardown & OS System Control Architecture
 
-This document describes the current implementation and architecture of clean session teardown (`END_SESSION`, lease fail-closed, `LOCK`) and OS power management (`SHUTDOWN`) in `BaronDeskAgent.ServiceCore`.
+This document describes clean session teardown (`END_SESSION`, lease fail-closed, `LOCK`) and OS power management (`SHUTDOWN`) in `BaronDeskAgent.ServiceCore`.
 
 Games (catalog delivery, launching, Session 0 launching, process tracking, installed game discovery) are in `GamesHandling.md`.
 
@@ -53,7 +53,7 @@ LOCK
       └── 3. StopCurrentGameAsync() if StationPolicy.StopGameOnLock   (session stays bound)
 ```
 
-The old wiring stopped the game twice: once in the `END_SESSION` handler, and again through a fire-and-forget `OnSessionEnded` handler in `Program.cs`. Both are replaced by this single path.
+Every way a session ends goes through this single path, so the game is stopped exactly once and in a known order.
 
 How the game itself is found and closed (graceful close, then process-tree kill; launchers never killed) is in `GamesHandling.md` §4.
 
@@ -106,9 +106,9 @@ ShutdownCommandHandler
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] Teardown through one `StationController` path (overlay first, then game, then session)
-- [x] `LOCK` stops the game by policy (`StopGameOnLock`)
-- [x] `SHUTDOWN` validated, acked early, station locked before power-off
-- [x] `shutdown.exe` invoked with `ArgumentList` and exit-code checking
+- Teardown through one `StationController` path (overlay first, then game, then session)
+- `LOCK` stops the game by policy (`StopGameOnLock`)
+- `SHUTDOWN` validated, acked early, station locked before power-off
+- `shutdown.exe` invoked with `ArgumentList` and exit-code checking

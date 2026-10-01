@@ -1,6 +1,6 @@
 # BaronDesk Agent : Command Handling Architecture
 
-This document describes the current implementation and architecture of server command execution in `BaronDeskAgent.ServiceCore`: the allow-list, anti-replay, idempotency, payload validation, the seven command handlers and the `command_ack` / `command_nack` replies.
+This document describes how server commands are executed in `BaronDeskAgent.ServiceCore`: the allow-list, anti-replay, idempotency, payload validation, the seven command handlers and the `command_ack` / `command_nack` replies.
 
 ---
 
@@ -12,7 +12,7 @@ Desktop-Agent
 ├── src
 │   ├── BaronDesk.Shared
 │   │   └── Contracts
-│   │       ├── CommandTypes.cs          (frozen allow-list + proposed CATALOG_UPDATE)
+│   │       ├── CommandTypes.cs          (the allow-list of seven commands)
 │   │       ├── CommandPayloads.cs       (UNLOCK, LOCK, END_SESSION, LAUNCH_GAME, SHUTDOWN)
 │   │       ├── PolicyUpdatePayload.cs   (POLICY_UPDATE)
 │   │       ├── CommandAckPayload.cs
@@ -93,7 +93,7 @@ public sealed class CommandDispatcher
 ```
 
 - Handlers are indexed in a `FrozenDictionary` with `StringComparer.Ordinal`: `"lock"` is not `"LOCK"`.
-- The constructor fails fast if any allowed command (the six frozen ones plus the proposed `CATALOG_UPDATE`) has no registered handler.
+- The constructor fails fast if any of the seven allowed commands has no registered handler.
 - Ack/nack sends that fail (connection dropped) are logged, not thrown. The backend redelivers unacknowledged commands, and the outcome store turns a redelivered success into a plain re-ack.
 
 ---
@@ -151,7 +151,7 @@ Handlers **return** expected failures instead of throwing them.
 | `LAUNCH_GAME` | `LaunchGameCommandHandler` | no | `GameService.LaunchAsync` |
 | `SHUTDOWN` | `ShutdownCommandHandler` | no | `StationController.PrepareForShutdownAsync` + `SystemPowerService` |
 | `POLICY_UPDATE` | `PolicyUpdateCommandHandler` | no | `IPolicyStore.UpdatePolicyAsync` |
-| `CATALOG_UPDATE` ⚠ OPEN | `CatalogUpdateCommandHandler` | no | `GameCatalogSyncWorker.RequestSync` (acked once queued; the result follows as `catalog_status`) |
+| `CATALOG_UPDATE` | `CatalogUpdateCommandHandler` | no | `GameCatalogSyncWorker.RequestSync` (acked once queued; the result follows as `catalog_status`) |
 
 Session, lease and lock semantics are in `SessionAndLeaseControl.md`. Games are in `GamesHandling.md`, power in `SessionCommandsAndSystem.md`, and policy in `PolicyStore.md`.
 
@@ -162,8 +162,8 @@ Session, lease and lock semantics are in `SessionAndLeaseControl.md`. Games are 
 Payloads are typed records in `BaronDesk.Shared/Contracts/CommandPayloads.cs`, deserialized with the source-generated `AgentJsonContext`:
 
 - camelCase names, case-insensitive reading;
-- **strict number handling**: numbers are never parsed from strings, so parsing does not depend on the PC's language (`"2.5"` used to fail on fr-FR machines and was silently dropped);
-- one canonical name per field (the old snake_case and short aliases are gone).
+- **strict number handling**: numbers are never parsed from strings, so parsing does not depend on the PC's language (a string such as `"2.5"` would otherwise read differently on a French-locale machine);
+- one canonical name per field, with no aliases.
 
 `CommandPayload` helpers:
 
@@ -206,7 +206,7 @@ Command id arrives
                                     (a redelivery with the same id is executed again)
 ```
 
-Only successes are recorded. Before the review, the id was recorded **before** execution, so a command that failed and was redelivered got acknowledged without ever running.
+Only successes are recorded. Recording the id before execution would be wrong: a command that failed and was then redelivered would be acknowledged without ever running.
 
 ---
 
@@ -307,14 +307,14 @@ services.AddSingleton<CommandDispatcher>();
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] Case-sensitive allow-list of the six frozen commands, plus the proposed `CATALOG_UPDATE` (skill §15 item 9)
-- [x] Anti-replay on every command; `LOCK`/`END_SESSION` exempt from freshness only
-- [x] Idempotency: only successes recorded, persisted in SQLite (`HandledCommands`, last 256)
-- [x] Typed, source-generated payloads with strict number parsing and required-field validation
-- [x] The agent never invents a session id or game id
-- [x] `SHUTDOWN` acknowledged before execution; station locked before power-off
-- [x] `LOCK` / `END_SESSION` acked only when the overlay is confirmed (`EXEC_FAILED` otherwise)
-- [x] Structured `command_ack` / `command_nack` without internal details in reasons
-- [x] Unit tests for the dispatcher and payload parsing
+- Case-sensitive allow-list of seven commands (`UNLOCK`, `LOCK`, `SHUTDOWN`, `LAUNCH_GAME`, `END_SESSION`, `POLICY_UPDATE`, `CATALOG_UPDATE`)
+- Anti-replay on every command; `LOCK`/`END_SESSION` exempt from freshness only
+- Idempotency: only successes recorded, persisted in SQLite (`HandledCommands`, last 256)
+- Typed, source-generated payloads with strict number parsing and required-field validation
+- The agent never invents a session id or game id
+- `SHUTDOWN` acknowledged before execution; station locked before power-off
+- `LOCK` / `END_SESSION` acked only when the overlay is confirmed (`EXEC_FAILED` otherwise)
+- Structured `command_ack` / `command_nack` without internal details in reasons
+- Unit tests for the dispatcher and payload parsing

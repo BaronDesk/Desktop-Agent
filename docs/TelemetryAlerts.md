@@ -1,6 +1,6 @@
 # BaronDesk Agent : Telemetry Alerts & Anti-Theft Architecture
 
-This document describes the current implementation of hardware threshold alerts, USB anti-theft monitoring, and security-violation alerts in `BaronDeskAgent.ServiceCore`. All alerts are delivered through the SQLite outbox (see `HardwareTelemetry.md` §5).
+This document describes hardware threshold alerts, USB anti-theft monitoring, and security-violation alerts in `BaronDeskAgent.ServiceCore`. All alerts are delivered through the SQLite outbox (see `HardwareTelemetry.md` §5).
 
 ---
 
@@ -100,11 +100,11 @@ value ≥ threshold
 | `cpu_load` | `CPU_USAGE` | 5 points | **60 s** | HIGH; CRITICAL at ≥ 99 % |
 | `ram_usage` | `MEMORY_USAGE` | 5 points | **60 s** | HIGH; CRITICAL at ≥ 99 % |
 
-Why the changes:
+Why these rules:
 
-- **Sustain window for load and RAM:** a game at 100 % CPU is normal. The old evaluator raised (and the backend persisted) a `CPU_USAGE` alert every 60 s during ordinary play.
-- **Hysteresis for load and RAM too:** before, only temperatures had it.
-- **Monotonic timing:** cooldown and sustain use `TimeProvider.GetTimestamp()`. The old wall-clock cooldown could be suppressed by a clock change.
+- **Sustain window for load and RAM:** a game at 100 % CPU is normal. Without the 60 s window, ordinary play would raise (and the backend would store) a `CPU_USAGE` alert every minute.
+- **Hysteresis for every metric:** load and RAM use it like temperatures, so a value hovering around the threshold raises one alert, not a stream of them.
+- **Monotonic timing:** cooldown and sustain use `TimeProvider.GetTimestamp()`, so changing the Windows clock cannot suppress or repeat an alert.
 
 ---
 
@@ -114,7 +114,7 @@ Best-effort detection of a venue peripheral being unplugged and taken.
 
 ### Scope (honest limits — state them in the security document)
 
-- **Wired USB HID only** (keyboards, mice, HID interfaces of headsets), selected by device class `HIDClass` (`{745a17a0-74d3-11d0-b6fe-00a0c90f57da}`), independent of the Windows language. The old filter matched the display names "USB Root Hub" / "Hub USB racine", which only work in English and French.
+- **Wired USB HID only** (keyboards, mice, HID interfaces of headsets), selected by device class `HIDClass` (`{745a17a0-74d3-11d0-b6fe-00a0c90f57da}`), independent of the Windows language (display names such as "USB Root Hub" change with the language, so they are never used).
 - Wireless dongles, Bluetooth, hubs/KVMs and suspend/resume can hide or fake a theft.
 - VID/PID identifies the **model**, not the unit.
 
@@ -127,7 +127,7 @@ Device arrives
    └── during a session                  ──► the gamer's own device: its removal is ignored
 ```
 
-Before, any USB device (flash drives, webcams, …) plugged in at any time joined the watch list. A gamer removing their own USB stick raised a CRITICAL anti-theft alert.
+This is what keeps alerts meaningful: if every USB device (flash drives, webcams, …) joined the watch list, a gamer removing their own USB stick would raise a CRITICAL anti-theft alert.
 
 ### Composite Devices
 
@@ -160,15 +160,15 @@ DeviceRemoved (baseline device, last interface gone, anti-theft enabled)
 All anti-theft state (present devices, baseline, pending removals) is touched **only by the single reader loop**:
 
 - The native CfgMgr32 callback only filters and posts `DeviceArrived` / `DeviceRemoved` into a channel.
-- Debounce timers post `DebounceElapsed` with a generation number instead of mutating state. A stale timer (the device came back, or a newer removal replaced it) simply no longer matches.
+- Debounce timers post `DebounceElapsed` with a generation number instead of mutating state. A stale timer (the device came back, or a newer removal replaced it) simply does not match any more.
 
-The old implementation mutated a plain `Dictionary` from both the reader loop and the timer threads, and disposed `CancellationTokenSource`s that timers were still linking to.
+Keeping all state on one loop means no locks are needed, and no timer thread can ever race the reader.
 
 ### Native Registration
 
 - `CM_Register_Notification` with `CM_NOTIFY_FILTER_FLAG_ALL_DEVICE_INSTANCES`. The callback delegate is kept in a field (never garbage collected).
 - The instance id is read at offset 8 of `CM_NOTIFY_EVENT_DATA`.
-- `CM_Unregister_Notification` blocks until in-flight callbacks return, so the old manual callback counters and wait handles were removed.
+- `CM_Unregister_Notification` blocks until in-flight callbacks return, so no manual callback counters or wait handles are needed.
 - Device lookup on arrival uses `SetupDiOpenDeviceInfo` (one device) instead of enumerating every device on the machine for each event.
 
 ---
@@ -177,7 +177,7 @@ The old implementation mutated a plain `Dictionary` from both the reader loop an
 
 Besides the alert, the monitor reports the **connection status** of every watched device, so the dashboard can
 show "keyboard: connected / mouse: disconnected" per station and resolve a `DEVICE_REMOVED` alert once the device
-is back. OPEN (skill §15): agent proposal, confirm with backend member C.
+is back. The backend stores the latest list on the machine and shows it on the staff station page.
 
 | When | What is sent |
 |---|---|
@@ -250,9 +250,10 @@ Thresholds are backend-tuned **policy** (changed with `POLICY_UPDATE`, see `Poli
 | `type` | `String` (free text) |
 | `severity` | `AlertSeverity` enum |
 | `category` | `AlertCategory` enum (`HARDWARE`, `ANTI_THEFT`, `SECURITY_VIOLATION`): the backend maps the lowercase wire values |
-| `detail`, `occurredAt` | Not in `schema.prisma` yet |
+| `detail` | Stored in the alert's `value.message` |
+| `occurredAt` | Becomes the alert's `createdAt` |
 
-`type` is a plain string in the schema, so anti-theft and security alerts carry their own types (`DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING`). These are agent proposals: OPEN, confirm with backend member C.
+`type` is a plain string in the schema, so anti-theft and security alerts carry their own types (`DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING`), stored as sent.
 
 ---
 
@@ -275,18 +276,17 @@ Thresholds are backend-tuned **policy** (changed with `POLICY_UPDATE`, see `Poli
 
 ---
 
-## Current Status
+## Implementation Summary
 
-- [x] Shared alert constants (`AlertCategories`, `AlertSeverities`, `AlertTypes`)
-- [x] Per-metric `ThresholdAlarm` with hysteresis, sustain window and monotonic cooldown
-- [x] Load/RAM alerts only when sustained for 60 s
-- [x] Wired USB HID detection by device class (language independent)
-- [x] Baseline at startup and while idle; gamers' own devices ignored
-- [x] Composite devices tracked per physical device
-- [x] Debounce with generation-checked timer events; all state on one reader loop
-- [x] Security-violation alerts from the lock screen watchdog, rate-limited
-- [x] Peripheral connection status: `peripheral_status` on change, list in `state_report` (contract OPEN)
-- [x] Specific alert types: `DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING` (contract OPEN)
-- [x] All alerts delivered through the SQLite outbox
-- [x] Unit tests for hysteresis, sustain and severity
-- [ ] `detail` and `occurredAt` added to `schema.prisma` (backend, V4); `category` and a free-text `type` are there now
+- Shared alert constants (`AlertCategories`, `AlertSeverities`, `AlertTypes`)
+- Per-metric `ThresholdAlarm` with hysteresis, sustain window and monotonic cooldown
+- Load/RAM alerts only when sustained for 60 s
+- Wired USB HID detection by device class (language independent)
+- Baseline at startup and while idle; gamers' own devices ignored
+- Composite devices tracked per physical device
+- Debounce with generation-checked timer events; all state on one reader loop
+- Security-violation alerts from the lock screen watchdog, rate-limited
+- Peripheral connection status: `peripheral_status` on change, list in `state_report`
+- Specific alert types: `DEVICE_REMOVED`, `LOCK_SCREEN_MISSING`, `IPC_TAMPERING`
+- All alerts delivered through the SQLite outbox
+- Unit tests for hysteresis, sustain and severity
