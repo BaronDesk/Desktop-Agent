@@ -367,7 +367,7 @@ $env:DOTNET_ENVIRONMENT = "Development"; dotnet run --project src/BaronDeskAgent
 | `a` / `t` / `r` | Enable anti-theft / 30 °C thresholds / restore 85 °C | `command_ack`; `t` produces `TEMPERATURE_WARNING` alerts |
 | `q` | Server quits | Reconnect with growing, jittered delays |
 
-The mock also prints `[AUTH]` for every connection (credential presented or not, value hidden). The complete step-by-step local test procedure is in the repository `README.md` ("Local Testing Guide").
+The mock also prints `[AUTH]` for every connection (credential presented or not, value hidden). The complete step-by-step local test procedure is in [LocalTesting.md](LocalTesting.md).
 
 For `wss://` and pinning: `MOCK_TLS_CERT=cert.pem MOCK_TLS_KEY=key.pem node tools/mock-server/mock-server.js`, then copy the printed fingerprint into `PinnedCertificateHash`.
 

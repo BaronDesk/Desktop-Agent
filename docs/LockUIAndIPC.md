@@ -401,7 +401,7 @@ dotnet run --project src/BaronDesk.LockUI -- --windowed
 
 The flag is compiled out of **Release** builds (`#if DEBUG`). Otherwise a gamer could start a windowed instance first, take the single-instance slot, and receive the service's "lock" in a window they can move away.
 
-For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOCK` automatically after every acknowledged `UNLOCK`, so the lock/unlock cycle can be tested without typing in the covered terminal (see `README.md`, step 6B).
+For the real kiosk mode, the mock server's `MOCK_AUTO_RELOCK_SECONDS` sends `LOCK` automatically after every acknowledged `UNLOCK`, so the lock/unlock cycle can be tested without typing in the covered terminal (see [LocalTesting.md](LocalTesting.md), step 6B).
 
 ---
 

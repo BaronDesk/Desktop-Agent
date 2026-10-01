@@ -211,9 +211,23 @@ Everything the backend tunes at runtime (cadences, lease, thresholds, debounce, 
 ```powershell
 dotnet build BaronDeskAgent.slnx          # 0 warnings (warnings are errors)
 dotnet test BaronDeskAgent.slnx           # 193 tests
+```
 
+Against the real backend on the admin PC (elevated prompt; full steps in the README, *Running with the BaronDesk Backend*):
+
+```powershell
+$env:Agent__ServerUrl       = "wss://cstam-server.local/agent-ws"   # hosts entry → admin PC
+$env:Agent__SerialNumber    = $env:COMPUTERNAME
+$env:Agent__EnrollmentToken = "<one-time token>"                     # first start only
+dotnet run --project src/BaronDeskAgent.ServiceCore
+dotnet run --project src/BaronDesk.LockUI # non-elevated, in the gamer's session
+```
+
+Against the mock server, on one PC ([LocalTesting.md](LocalTesting.md)):
+
+```powershell
 node tools/mock-server/mock-server.js
-$env:DOTNET_ENVIRONMENT = "Development"; dotnet run --project src/BaronDeskAgent.ServiceCore
+dotnet run --project src/BaronDeskAgent.ServiceCore
 dotnet run --project src/BaronDesk.LockUI # covers the screen; the mock accepts PIN 1234
 ```
 
@@ -239,4 +253,4 @@ Production provisioning (elevated prompt):
 - Station policy with live updates
 - DPAPI station credential, automatic renewal, and signed first-contact enrollment
 
-**Deployment model:** the service core runs as a console host. Run it elevated to get CPU temperatures and to apply the Task Manager policy (see the README). Packaging it as a Windows Service, with the LockUI started at user sign-in, is outside the scope of this version.
+**Deployment model:** the service core runs as an elevated console host on each gaming PC and connects over the LAN to the backend on the admin PC (`wss://cstam-server.local/agent-ws`, through Caddy). Elevation is needed for the DPAPI credential, CPU temperatures and the Task Manager policy. Because Caddy's internal CA renews its leaf certificate every 12 hours and the agent pins the leaf, the LAN setup runs in Development mode without a pin; pinning the public key or Caddy's root CA is the next step. Packaging it as a Windows Service, with the LockUI started at user sign-in, is outside the scope of this version.
