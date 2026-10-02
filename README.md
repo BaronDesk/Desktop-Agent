@@ -119,7 +119,7 @@ The overlay covers every monitor and blocks the Windows key, Alt+Tab and Alt+F4.
 
 ### About the run mode
 
-`dotnet run` starts the agent in the **Development** environment (`Properties/launchSettings.json`). On the venue LAN this is what lets it accept the certificate of Caddy's internal CA without a pin (`AllowUntrustedCertificate`, see [Known Limitations](#known-limitations)): the link is still TLS-encrypted end to end. Every other protection (station credential, DPAPI, signed enrollment, anti-replay, allow-listed commands, fail-closed lease) is identical to production. Settings can also be put in `src/BaronDeskAgent.ServiceCore/appsettings.Development.json` instead of environment variables; all keys are listed in [docs/Architecture.md §6](docs/Architecture.md#6-configuration).
+`dotnet run` starts the agent in the **Development** environment (`Properties/launchSettings.json`). On the venue LAN this is what lets it accept the certificate of Caddy's internal CA without a pin (`AllowUntrustedCertificate`: the link is still TLS-encrypted end to end. Every other protection (station credential, DPAPI, signed enrollment, anti-replay, allow-listed commands, fail-closed lease) is identical to production. Settings can also be put in `src/BaronDeskAgent.ServiceCore/appsettings.Development.json` instead of environment variables; all keys are listed in [docs/Architecture.md §6](docs/Architecture.md#6-configuration).
 
 ---
 
