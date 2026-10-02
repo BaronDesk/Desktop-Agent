@@ -148,7 +148,7 @@ The backend repository has a full manual test plan for this setup: `back-end/doc
 
 - **The agent decides nothing:** PINs, balances and sessions are checked by the backend. The station only obeys `UNLOCK` / `LOCK`.
 - **Fail closed:** the station starts locked and locks again on any expired lease, lost connection or broken component.
-- **Certificate pinning:** in production the server certificate is pinned, and on a mismatch nothing, not even the credential, leaves the PC (implemented and tested; see [Known Limitations](#known-limitations) for the LAN setup).
+- **Certificate pinning:** in production the server certificate is pinned, and on a mismatch nothing, not even the credential, leaves the PC (implemented and tested for the LAN setup).
 - **Protected identity:** the station credential and key pair are stored with Windows DPAPI in files only SYSTEM and Administrators can read; enrollment requests are signed with the station's own ECDSA key.
 - **Anti-replay:** every inbound frame is checked for sequence and freshness against the server clock.
 - **Allow-listed commands only:** seven commands, matched exactly; games run only from the synced catalog, never from a path in a command.
