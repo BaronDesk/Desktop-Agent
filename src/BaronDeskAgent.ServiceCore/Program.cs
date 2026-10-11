@@ -99,7 +99,7 @@ services.AddHostedService<OutboxWorker>();
 services.AddHostedService(provider => provider.GetRequiredService<GameCatalogSyncWorker>());
 services.AddHostedService<HardwareMonitorService>();
 services.AddHostedService<UsbMonitorService>();
-
+services.AddSingleton<SessionStateRepository>();
 var host = builder.Build();
 
 await InitializeLocalStateAsync(host.Services, builder.Environment);
@@ -109,7 +109,9 @@ return 0;
 // Runs before any worker starts, so workers see the persisted policy and handled-command ids.
 static async Task InitializeLocalStateAsync(IServiceProvider provider, IHostEnvironment environment)
 {
-    await provider.GetRequiredService<DatabaseInitializer>().InitializeAsync();
+    // Restore the persisted session and start locked before workers begin.
+    var station = provider.GetRequiredService<StationController>();
+    await station.RestorePersistedStateAsync();
 
     if (environment.IsDevelopment())
     {

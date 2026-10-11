@@ -1,6 +1,6 @@
 using BaronDeskAgent.ServiceCore.Games;
 using BaronDeskAgent.ServiceCore.Policy;
-
+using BaronDeskAgent.ServiceCore.Persistence;
 namespace BaronDeskAgent.ServiceCore.Session;
 
 public sealed record StationSnapshot(bool Locked, Guid? SessionId, string? RunningGameId, DateTimeOffset? LeaseExpiresAt);
@@ -25,7 +25,7 @@ public readonly record struct EndSessionResult(bool StaleSessionIgnored, Overlay
 public sealed class StationController : IDisposable
 {
     private static readonly TimeSpan LeaseCheckInterval = TimeSpan.FromSeconds(5);
-
+    private readonly SessionStateRepository _sessionStateRepository;
     private readonly LockService _lockService;
     private readonly SessionService _sessionService;
     private readonly LeaseManager _leaseManager;
@@ -43,11 +43,13 @@ public sealed class StationController : IDisposable
         GameService gameService,
         IPolicyStore policyStore,
         TimeProvider timeProvider,
+        SessionStateRepository sessionStateRepository,
         ILogger<StationController> logger)
     {
         _lockService = lockService;
         _sessionService = sessionService;
         _leaseManager = leaseManager;
+        _sessionStateRepository = sessionStateRepository;
         _gameService = gameService;
         _policyStore = policyStore;
         _logger = logger;
@@ -75,7 +77,8 @@ public sealed class StationController : IDisposable
             }
 
             _sessionService.Start(sessionId);
-
+            await _sessionStateRepository.SaveAsync(
+                sessionId, null, null, cancellationToken);
             // Granted before unlocking, so the station is never unlocked without a lease.
             _leaseManager.Grant(leaseDuration);
             await _lockService.UnlockAsync(cancellationToken);
@@ -115,7 +118,10 @@ public sealed class StationController : IDisposable
     /// LOCK (e.g. billing run-out): locks and revokes the lease. The session stays bound so the backend can
     /// UNLOCK again after a top-up. Returns whether the overlay was confirmed.
     /// </summary>
-    public async Task<OverlayResult> LockAsync(CancellationToken cancellationToken)
+    
+    public async Task<OverlayResult> LockAsync(
+        CancellationToken cancellationToken,
+        string reason = "manual_lock")
     {
         await _gate.WaitAsync(cancellationToken);
         try
@@ -128,6 +134,13 @@ public sealed class StationController : IDisposable
                 await StopGameSafelyAsync();
             }
 
+            // NEW: Save the session state and why the station was locked.
+            await _sessionStateRepository.SaveAsync(
+                _sessionService.CurrentSessionId,
+                reason,
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
+
             return overlay;
         }
         finally
@@ -135,6 +148,7 @@ public sealed class StationController : IDisposable
             _gate.Release();
         }
     }
+
 
     /// <summary>Renews the lease from a heartbeat ack. Ignored when no session is bound.</summary>
     public void RenewLease(TimeSpan? duration)
@@ -226,13 +240,20 @@ public sealed class StationController : IDisposable
         var overlay = await _lockService.LockAsync(CancellationToken.None);
         await StopGameSafelyAsync();
         _sessionService.End(reason);
+        await _sessionStateRepository.ClearAsync(CancellationToken.None);
         return overlay;
     }
     /// <summary>Caller holds the gate. Locks and drops the lease, but leaves the session bound and the game running.</summary>
     private async Task<OverlayResult> LockKeepingSessionCoreAsync()
     {
         _leaseManager.Revoke();
-        return await _lockService.LockAsync(CancellationToken.None);
+        var overlay = await _lockService.LockAsync(CancellationToken.None);
+        await _sessionStateRepository.SaveAsync(
+            _sessionService.CurrentSessionId,
+            "lease_expired",
+            DateTimeOffset.UtcNow,
+            CancellationToken.None);
+        return overlay;
     }
 
     private async Task StopGameSafelyAsync()
@@ -244,6 +265,43 @@ public sealed class StationController : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Could not stop the running game.");
+        }
+    }
+    public async Task RestorePersistedStateAsync(
+    CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var saved = await _sessionStateRepository.LoadAsync(cancellationToken);
+
+            // Never trust a lease that existed before this process started.
+            _leaseManager.Revoke();
+
+            if (saved?.SessionId is { } sessionId)
+            {
+                _sessionService.Start(sessionId);
+
+                _logger.LogWarning(
+                    "Recovered session {SessionId} after restart. " +
+                    "Keeping station locked pending server authorization.",
+                    sessionId);
+            }
+
+            await _lockService.LockAsync(CancellationToken.None);
+
+            if (saved?.SessionId is { } recoveredSessionId)
+            {
+                await _sessionStateRepository.SaveAsync(
+                    recoveredSessionId,
+                    "agent_restart",
+                    DateTimeOffset.UtcNow,
+                    CancellationToken.None);
+            }
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 }

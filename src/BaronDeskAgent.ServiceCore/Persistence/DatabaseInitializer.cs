@@ -75,7 +75,21 @@ public sealed class DatabaseInitializer
         ALTER TABLE GameCatalog RENAME COLUMN ExecutablePath TO Target;
         ALTER TABLE GameCatalog ADD COLUMN LaunchType TEXT NOT NULL DEFAULT 'exe';
         ALTER TABLE GameCatalog ADD COLUMN ProcessName TEXT;
+        """,
+        //v4:review sessionState before restarting it.
         """
+        CREATE TABLE IF NOT EXISTS SessionState
+        (
+            Id INTEGER PRIMARY KEY CHECK (Id = 1),
+            SessionId TEXT NULL,
+            LockReason TEXT NULL,
+            LockedAt TEXT NULL,
+            UpdatedAt TEXT NOT NULL
+        );
+
+        """
+
+        
     ];
 
     private readonly AgentDatabase _database;

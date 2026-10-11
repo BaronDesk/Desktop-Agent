@@ -33,7 +33,7 @@ public sealed class LockCommandHandler : ICommandHandler
             _logger.LogWarning("LOCK payload ignored ({Error}); locking anyway.", error);
         }
 
-        var overlay = await _station.LockAsync(cancellationToken);
+        var overlay = await _station.LockAsync(cancellationToken,payload?.Reason ?? "manual_lock");
         return overlay == OverlayResult.Confirmed
             ? CommandResult.Success()
             : CommandResult.Failed(overlay.DescribeLockFailure());
