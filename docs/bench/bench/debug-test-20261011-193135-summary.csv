@@ -1,0 +1,2 @@
+"Scenario","Process","Samples","CpuAvgPercent","CpuP95Percent","CpuMaxPercent","PrivateMBAvg","PrivateMBMax","PrivateMBGrowth"
+"debug-test","BaronDesk.LockUI","11","0,127","0,232","0,232","56,9","57,5","-1,2"
