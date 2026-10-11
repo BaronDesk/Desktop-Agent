@@ -196,10 +196,11 @@ public sealed class StationController : IDisposable
                 }
 
                 _logger.LogWarning(
-                    "Station is unlocked without a valid lease ({Status}). Failing closed.",
-                    _leaseManager.GetStatus());
+                "Lease expired while unlocked ({Status}). Locking; keeping session {SessionId} and its game.",
+                _leaseManager.GetStatus(),
+                _sessionService.CurrentSessionId);
 
-                await EndAndLockCoreAsync("lease_expired");
+                await LockKeepingSessionCoreAsync();
             }
             finally
             {
@@ -226,6 +227,12 @@ public sealed class StationController : IDisposable
         await StopGameSafelyAsync();
         _sessionService.End(reason);
         return overlay;
+    }
+    /// <summary>Caller holds the gate. Locks and drops the lease, but leaves the session bound and the game running.</summary>
+    private async Task<OverlayResult> LockKeepingSessionCoreAsync()
+    {
+        _leaseManager.Revoke();
+        return await _lockService.LockAsync(CancellationToken.None);
     }
 
     private async Task StopGameSafelyAsync()
