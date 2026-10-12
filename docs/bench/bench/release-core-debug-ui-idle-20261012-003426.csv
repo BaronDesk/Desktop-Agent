@@ -1,0 +1,2 @@
+"Time","Scenario","Process","CpuPercent","PrivateMB","WorkingSetMB","Threads","Handles"
+"2026-10-12T00:34:31","release-core-debug-ui-idle","BaronDeskAgent.ServiceCore","0,039","33","83,6","18","520"

@@ -87,7 +87,12 @@ public sealed class DatabaseInitializer
             UpdatedAt TEXT NOT NULL
         );
 
+        """, 
+        // v5: persist connection-loss and restart-recovery state.
         """
+        ALTER TABLE SessionState ADD COLUMN ContactLostAt TEXT NULL;
+        ALTER TABLE SessionState ADD COLUMN RestartRecovered INTEGER NOT NULL DEFAULT 0;
+        """,
 
         
     ];

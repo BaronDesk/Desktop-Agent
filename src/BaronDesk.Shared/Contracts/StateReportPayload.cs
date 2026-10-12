@@ -10,6 +10,10 @@ public sealed record StateReportPayload
     public Guid? SessionId { get; init; }
 
     public string? RunningGameId { get; init; }
+    public string? LockReason { get; init; }
+    public DateTimeOffset? LockedAt { get; init; }
+    public DateTimeOffset? ContactLostAt { get; init; }
+    public bool RestartRecovered { get; init; }
 
     /// <summary>Lease expiry on the (estimated) server clock, or null when there is no lease.</summary>
     public DateTimeOffset? LeaseExpiresAt { get; init; }

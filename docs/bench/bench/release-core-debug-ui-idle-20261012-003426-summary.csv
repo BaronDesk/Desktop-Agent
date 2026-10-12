@@ -1,0 +1,2 @@
+"Scenario","Process","Samples","CpuAvgPercent","CpuP95Percent","CpuMaxPercent","PrivateMBAvg","PrivateMBMax","PrivateMBGrowth"
+"release-core-debug-ui-idle","BaronDeskAgent.ServiceCore","1","0,039","0,039","0,039","33","33","0"

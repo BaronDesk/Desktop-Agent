@@ -409,6 +409,10 @@ function handleTextMessage(text, socket) {
             console.log(`   • SessionId      : ${env.payload?.sessionId || 'none'}`);
             console.log(`   • RunningGameId  : ${env.payload?.runningGameId || 'none'}`);
             console.log(`   • LeaseExpiresAt : ${env.payload?.leaseExpiresAt || 'none'}`);
+            console.log(`LockReason: ${env.payload?.lockReason ?? 'none'}`);
+            console.log(`LockedAt: ${env.payload?.lockedAt ?? 'none'}`);
+            console.log(`ContactLostAt: ${env.payload?.contactLostAt ?? 'none'}`);
+            console.log(`RestartRecovered: ${env.payload?.restartRecovered ?? false}`);
             printPeripherals(env.payload?.peripherals);
         } else if (type === 'heartbeat') {
             console.log(`\x1b[32m[HEARTBEAT]\x1b[0m Locked: ${env.payload?.locked}, SessionId: ${env.payload?.sessionId || 'null'}`);

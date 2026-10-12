@@ -293,10 +293,12 @@ public sealed class StationController : IDisposable
             if (saved?.SessionId is { } recoveredSessionId)
             {
                 await _sessionStateRepository.SaveAsync(
-                    recoveredSessionId,
-                    "agent_restart",
-                    DateTimeOffset.UtcNow,
-                    CancellationToken.None);
+                recoveredSessionId,
+                saved.LockReason ?? "agent_restart",
+                saved.LockedAt ?? DateTimeOffset.UtcNow,
+                CancellationToken.None,
+                saved.ContactLostAt,
+                restartRecovered: true);
             }
         }
         finally

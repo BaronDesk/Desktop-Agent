@@ -8,6 +8,7 @@ using BaronDeskAgent.ServiceCore.Configuration;
 using BaronDeskAgent.ServiceCore.Credentials;
 using BaronDeskAgent.ServiceCore.Enrollment;
 using BaronDeskAgent.ServiceCore.Session;
+using BaronDeskAgent.ServiceCore.Persistence;
 using Microsoft.Extensions.Options;
 
 namespace BaronDeskAgent.ServiceCore.Connection;
@@ -19,6 +20,7 @@ public sealed class ConnectionWorker : BackgroundService
 {
     /// <summary>A connection that lasted this long resets the reconnect backoff.</summary>
     private static readonly TimeSpan StableConnectionThreshold = TimeSpan.FromSeconds(30);
+    private readonly SessionStateRepository _sessionStateRepository;
 
     internal static readonly string AgentVersion =
         typeof(ConnectionWorker).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -40,6 +42,7 @@ public sealed class ConnectionWorker : BackgroundService
 
     public ConnectionWorker(
         IServerConnection connection,
+        SessionStateRepository sessionStateRepository,
         CommandDispatcher dispatcher,
         ReplayGuard replayGuard,
         ServerClock serverClock,
@@ -55,6 +58,7 @@ public sealed class ConnectionWorker : BackgroundService
     {
         _connection = connection;
         _dispatcher = dispatcher;
+        _sessionStateRepository = sessionStateRepository;
         _replayGuard = replayGuard;
         _serverClock = serverClock;
         _station = station;
@@ -109,6 +113,33 @@ public sealed class ConnectionWorker : BackgroundService
             }
             finally
             {
+                if (connectedAt is not null &&
+                !stoppingToken.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var saved = await _sessionStateRepository.LoadAsync(
+                            CancellationToken.None);
+
+                        var contactLostAt = _serverClock.IsSynchronized
+                            ? _serverClock.UtcNow
+                            : saved?.ContactLostAt;
+
+                        await _sessionStateRepository.SaveAsync(
+                            saved?.SessionId ?? _station.GetSnapshot().SessionId,
+                            saved?.LockReason,
+                            saved?.LockedAt,
+                            CancellationToken.None,
+                            contactLostAt,
+                            saved?.RestartRecovered ?? false);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(
+                            ex, "Failed to persist the connection-loss event.");
+                        }
+                    }
+
                 await _connection.DisconnectAsync(CancellationToken.None);
             }
 
@@ -154,13 +185,18 @@ public sealed class ConnectionWorker : BackgroundService
     private async Task SendStateReportAsync(CancellationToken cancellationToken)
     {
         var snapshot = _station.GetSnapshot();
+        var saved = await _sessionStateRepository.LoadAsync(cancellationToken);
         var report = new StateReportPayload
         {
             Locked = snapshot.Locked,
             SessionId = snapshot.SessionId,
             RunningGameId = snapshot.RunningGameId,
             LeaseExpiresAt = snapshot.LeaseExpiresAt,
-            Peripherals = _peripherals.Current
+            Peripherals = _peripherals.Current,
+            LockReason = saved?.LockReason,
+            LockedAt = saved?.LockedAt,
+            ContactLostAt = saved?.ContactLostAt,
+            RestartRecovered = saved?.RestartRecovered ?? false
         };
 
         await _connection.SendAsync(MessageTypes.StateReport, report, AgentJsonContext.Default.StateReportPayload, cancellationToken);
